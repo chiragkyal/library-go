@@ -130,7 +130,9 @@ func (c *StaticResourceController) WithIgnoreNotFoundOnCreate() *StaticResourceC
 }
 
 // WithPrecondition adds a precondition, which blocks the sync method from being executed. Preconditions might be chained using:
-//  WithPrecondition(a).WithPrecondition(b).WithPrecondition(c).
+//
+//	WithPrecondition(a).WithPrecondition(b).WithPrecondition(c).
+//
 // If any of the preconditions is false, the sync will result in an error.
 //
 // The requirement parameter should follow the convention described in the StaticResourcesPreconditionsFuncType.
@@ -280,8 +282,21 @@ func (c *StaticResourceController) Sync(ctx context.Context, syncContext factory
 	if err != nil {
 		return err
 	}
+
+	if apierrors.IsNotFound(err) && management.IsOperatorRemovable() {
+		return nil
+	}
+
 	if !management.IsOperatorManaged(operatorSpec.ManagementState) {
 		return nil
+	}
+
+	meta, err := c.operatorClient.GetObjectMeta()
+	if err != nil {
+		return err
+	}
+	if management.IsOperatorRemovable() && meta.DeletionTimestamp != nil {
+		return c.syncDeleting(ctx, operatorSpec, syncContext)
 	}
 
 	for _, precondition := range c.preconditions {
@@ -305,6 +320,13 @@ func (c *StaticResourceController) Sync(ctx context.Context, syncContext factory
 			return err
 		}
 	}
+
+	// commenting out since required interface is OperatorClientWithFinalizers
+	// if management.IsOperatorRemovable() {
+	// 	if err := v1helpers.EnsureFinalizer(ctx, c.operatorClient, c.name); err != nil {
+	// 		return err
+	// 	}
+	// }
 
 	errors := []error{}
 	var notFoundErrorsCount int
@@ -365,6 +387,48 @@ func (c *StaticResourceController) Sync(ctx context.Context, syncContext factory
 		errors = append(errors, err)
 	}
 	return utilerrors.NewAggregate(errors)
+}
+
+func (c *StaticResourceController) syncDeleting(ctx context.Context, operatorSpec *operatorv1.OperatorSpec, syncContext factory.SyncContext) error {
+	klog.V(4).Infof("syncDeleting")
+	if !management.IsOperatorManaged(operatorSpec.ManagementState) {
+		return nil
+	}
+
+	errors := []error{}
+	var notFoundErrorsCount int
+	for _, conditionalManifest := range c.manifests {
+		shouldCreate := conditionalManifest.shouldCreateFn()
+		shouldDelete := conditionalManifest.shouldDeleteFn()
+
+		var directResourceResults []resourceapply.ApplyResult
+
+		switch {
+		case !shouldCreate && !shouldDelete:
+			// no action required
+			continue
+		case shouldCreate && shouldDelete:
+			errors = append(errors, fmt.Errorf("cannot create and delete %v at the same time, skipping", strings.Join(conditionalManifest.files, ", ")))
+			continue
+		case shouldDelete:
+			directResourceResults = resourceapply.DeleteAll(ctx, c.clients, syncContext.Recorder(), conditionalManifest.manifests, conditionalManifest.files...)
+		}
+
+		for _, currResult := range directResourceResults {
+			if apierrors.IsNotFound(currResult.Error) {
+				notFoundErrorsCount++
+			}
+			if currResult.Error != nil {
+				errors = append(errors, fmt.Errorf("%q (%T): %v", currResult.File, currResult.Type, currResult.Error))
+				continue
+			}
+		}
+	}
+
+	// TODO
+	// commenting out since required interface is OperatorClientWithFinalizers
+	// return v1helpers.RemoveFinalizer(ctx, c.operatorClient, c.name)
+	return nil
 }
 
 func (c *StaticResourceController) Name() string {
