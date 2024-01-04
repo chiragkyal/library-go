@@ -8,31 +8,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
 
-type listObjectFunc func(string, metav1.ListOptions) (runtime.Object, error)
-type watchObjectFunc func(string, metav1.ListOptions) (watch.Interface, error)
-
 type SecretEventHandlerRegistration interface {
 	cache.ResourceEventHandlerRegistration
 
 	GetKey() ObjectKey
-}
-
-type SecretMonitor interface {
-	AddEventHandler(namespace, name string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
-
-	RemoveEventHandler(SecretEventHandlerRegistration) error
-
-	GetSecret(SecretEventHandlerRegistration) (*v1.Secret, error)
 }
 
 type secretEventHandlerRegistration struct {
@@ -42,6 +28,14 @@ type secretEventHandlerRegistration struct {
 
 func (r *secretEventHandlerRegistration) GetKey() ObjectKey {
 	return r.objectKey
+}
+
+type SecretMonitor interface {
+	AddEventHandler(namespace, name string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
+
+	RemoveEventHandler(SecretEventHandlerRegistration) error
+
+	GetSecret(SecretEventHandlerRegistration) (*v1.Secret, error)
 }
 
 type sm struct {
