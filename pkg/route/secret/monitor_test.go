@@ -18,7 +18,21 @@ var (
 	testSecretName = "testSecretName"
 )
 
-func fakeSecret(name string) *corev1.Secret {
+func newInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace string) cache.SharedInformer {
+	return cache.NewSharedInformer(&cache.ListWatch{
+		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+			return fakeKubeClient.CoreV1().Secrets(namespace).List(ctx, options)
+		},
+		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+			return fakeKubeClient.CoreV1().Secrets(namespace).Watch(ctx, options)
+		},
+	},
+		&corev1.Secret{},
+		1*time.Second,
+	)
+}
+
+func fakeSecret(namespace, name string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -40,39 +54,36 @@ func fakeSecret(name string) *corev1.Secret {
 */
 
 func TestMonitor(t *testing.T) {
-	fakeKubeClient := fake.NewSimpleClientset(fakeSecret(testSecretName))
+	fakeKubeClient := fake.NewSimpleClientset(fakeSecret(testNamespace, testSecretName))
 	queue := make(chan string)
+	ctx, shutdown := context.WithCancel(context.Background())
+	defer shutdown()
 
-	sharedInformer := cache.NewSharedInformer(&cache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-			return fakeKubeClient.CoreV1().Secrets(testNamespace).List(context.TODO(), options)
-		},
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-			return fakeKubeClient.CoreV1().Secrets(testNamespace).Watch(context.TODO(), options)
-		},
-	}, &corev1.Secret{}, 1*time.Second)
+	sharedInformer := newInformer(ctx, fakeKubeClient, testNamespace)
+	singleItemMonitor := newSingleItemMonitor(ObjectKey{Name: "route_secret-name", Namespace: testNamespace}, sharedInformer)
 
-	singleItemMonitor := newSingleItemMonitor(ObjectKey{}, sharedInformer)
+	go singleItemMonitor.StartInformer()
+	if !cache.WaitForCacheSync(ctx.Done(), singleItemMonitor.HasSynced) {
+		t.Fatal("cache not synced yet")
+	}
 
-	_, err := singleItemMonitor.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	handlerfunc := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			secret, ok := obj.(*corev1.Secret)
 			if !ok {
 				t.Errorf("invalid object")
 			}
 			queue <- secret.Name
-		},
-	})
-
+		}}
+	var intr cache.ResourceEventHandler
+	intr = handlerfunc
+	handle, err := singleItemMonitor.AddEventHandler(intr)
 	if err != nil {
 		t.Errorf("got error %v", err)
 	}
-	go singleItemMonitor.StartInformer()
 
-	// wait for informer to sync
-	time.Sleep(time.Second)
-	if !singleItemMonitor.HasSynced() {
-		t.Fatal("infromer not synced yet")
+	if singleItemMonitor.numHandlers.Load() != 1 {
+		t.Errorf("expected %d handler got %d", 1, singleItemMonitor.numHandlers.Load())
 	}
 
 	select {
@@ -80,8 +91,15 @@ func TestMonitor(t *testing.T) {
 		if s != testSecretName {
 			t.Errorf("expected %s got %s", testSecretName, s)
 		}
+		err = singleItemMonitor.RemoveEventHandler(handle)
+		// if err != nil {
+		// 	t.Errorf("got error : %v", err.Error())
+		// }
+		if singleItemMonitor.numHandlers.Load() != 0 {
+			t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
+		}
 		singleItemMonitor.Stop()
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
 }

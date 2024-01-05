@@ -80,7 +80,7 @@ func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO hard coded to test since externalCertificate is TP
+	// TODO hard coded to test since externalCertificate is TP  , I guess this would be "_"
 	handle, err := m.monitor.AddEventHandler(parent.Namespace, fmt.Sprintf("%s/%s", parent.Name, "dummy-secret"), m.secretHandler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
