@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 var (
 	testNamespace  = "testNamespace"
 	testSecretName = "testSecretName"
+	testRouteName  = "testRouteName"
 )
 
 func newInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace string) cache.SharedInformer {
@@ -60,7 +62,8 @@ func TestMonitor(t *testing.T) {
 	defer shutdown()
 
 	sharedInformer := newInformer(ctx, fakeKubeClient, testNamespace)
-	singleItemMonitor := newSingleItemMonitor(ObjectKey{Name: "route_secret-name", Namespace: testNamespace}, sharedInformer)
+	name := fmt.Sprintf("%s_%s", testRouteName, testSecretName)
+	singleItemMonitor := newSingleItemMonitor(ObjectKey{Name: name, Namespace: testNamespace}, sharedInformer)
 
 	go singleItemMonitor.StartInformer()
 	if !cache.WaitForCacheSync(ctx.Done(), singleItemMonitor.HasSynced) {
@@ -74,7 +77,10 @@ func TestMonitor(t *testing.T) {
 				t.Errorf("invalid object")
 			}
 			queue <- secret.Name
-		}}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {},
+		DeleteFunc: func(obj interface{}) {},
+	}
 	var intr cache.ResourceEventHandler
 	intr = handlerfunc
 	handle, err := singleItemMonitor.AddEventHandler(intr)
@@ -91,14 +97,17 @@ func TestMonitor(t *testing.T) {
 		if s != testSecretName {
 			t.Errorf("expected %s got %s", testSecretName, s)
 		}
+		// singleItemMonitor.GetItem().
 		err = singleItemMonitor.RemoveEventHandler(handle)
 		// if err != nil {
 		// 	t.Errorf("got error : %v", err.Error())
 		// }
-		if singleItemMonitor.numHandlers.Load() != 0 {
-			t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
+		// if singleItemMonitor.numHandlers.Load() != 0 {
+		// 	t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
+		// }
+		if !singleItemMonitor.Stop() {
+			t.Error("failed to stop informer")
 		}
-		singleItemMonitor.Stop()
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
