@@ -83,7 +83,7 @@ func TestMonitor(t *testing.T) {
 	}
 	var intr cache.ResourceEventHandler
 	intr = handlerfunc
-	handle, err := singleItemMonitor.AddEventHandler(intr)
+	handlerRegistration, err := singleItemMonitor.AddEventHandler(intr)
 	if err != nil {
 		t.Errorf("got error %v", err)
 	}
@@ -98,13 +98,13 @@ func TestMonitor(t *testing.T) {
 			t.Errorf("expected %s got %s", testSecretName, s)
 		}
 		// singleItemMonitor.GetItem().
-		err = singleItemMonitor.RemoveEventHandler(handle)
-		// if err != nil {
-		// 	t.Errorf("got error : %v", err.Error())
-		// }
-		// if singleItemMonitor.numHandlers.Load() != 0 {
-		// 	t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
-		// }
+		err = singleItemMonitor.RemoveEventHandler(handlerRegistration)
+		if err != nil {
+			t.Errorf("got error : %v", err.Error())
+		}
+		if singleItemMonitor.numHandlers.Load() != 0 {
+			t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
+		}
 		if !singleItemMonitor.Stop() {
 			t.Error("failed to stop informer")
 		}
