@@ -77,7 +77,7 @@ func (i *singleItemMonitor) RemoveEventHandler(handler SecretEventHandlerRegistr
 
 // I think it will return secret name from route_secret
 func (i *singleItemMonitor) GetItemKey() string {
-	if keys := strings.Split(i.key.Name, "_"); len(keys) == 1 {
+	if keys := strings.Split(i.key.Name, "_"); len(keys) == 2 {
 		return keys[1]
 	}
 
@@ -86,5 +86,5 @@ func (i *singleItemMonitor) GetItemKey() string {
 
 func (i *singleItemMonitor) GetItem() (item interface{}, exists bool, err error) {
 	itemKey := i.GetItemKey()
-	return i.informer.GetStore().Get(fmt.Sprintf("%s/%s", i.key.Namespace, itemKey))
+	return i.informer.GetStore().GetByKey(fmt.Sprintf("%s/%s", i.key.Namespace, itemKey))
 }
