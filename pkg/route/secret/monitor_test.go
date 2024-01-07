@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -97,7 +98,23 @@ func TestMonitor(t *testing.T) {
 		if s != testSecretName {
 			t.Errorf("expected %s got %s", testSecretName, s)
 		}
-		// singleItemMonitor.GetItem().
+
+		// get secret
+		uncast, exists, err := singleItemMonitor.GetItem()
+		if err != nil {
+			t.Error(err)
+		}
+		if !exists {
+			t.Error("secret does not exist")
+		}
+		ret, ok := uncast.(*v1.Secret)
+		if !ok {
+			t.Errorf("unexpected type: %T", uncast)
+		}
+		if s != ret.Name {
+			t.Errorf("expected %s got %s", ret.Name, s)
+		}
+
 		err = singleItemMonitor.RemoveEventHandler(handlerRegistration)
 		if err != nil {
 			t.Errorf("got error : %v", err.Error())
