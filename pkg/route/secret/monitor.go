@@ -67,8 +67,8 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 	}, nil
 }
 
-func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
-	if err := i.informer.RemoveEventHandler(handle); err != nil {
+func (i *singleItemMonitor) RemoveEventHandler(handler SecretEventHandlerRegistration) error {
+	if err := i.informer.RemoveEventHandler(handler.GetHandler()); err != nil {
 		return err
 	}
 	i.numHandlers.Add(-1)
