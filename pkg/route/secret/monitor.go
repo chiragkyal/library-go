@@ -2,7 +2,6 @@ package secret
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -19,10 +18,16 @@ type singleItemMonitor struct {
 	key         ObjectKey
 	informer    cache.SharedInformer
 	numHandlers atomic.Int32
+	lock        sync.Mutex
+	stopped     bool
+	stopCh      chan struct{}
+}
 
-	lock    sync.Mutex
-	stopped bool
-	stopCh  chan struct{}
+func NewObjectKey(namespace, name string) ObjectKey {
+	return ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}
 }
 
 func newSingleItemMonitor(key ObjectKey, informer cache.SharedInformer) *singleItemMonitor {
@@ -31,18 +36,6 @@ func newSingleItemMonitor(key ObjectKey, informer cache.SharedInformer) *singleI
 		informer: informer,
 		stopCh:   make(chan struct{}),
 	}
-}
-
-func (i *singleItemMonitor) Stop() bool {
-	i.lock.Lock()
-	defer i.lock.Unlock()
-
-	if i.stopped {
-		return false
-	}
-	i.stopped = true
-	close(i.stopCh)
-	return true
 }
 
 func (i *singleItemMonitor) HasSynced() bool {
@@ -54,7 +47,24 @@ func (i *singleItemMonitor) StartInformer() {
 	i.informer.Run(i.stopCh)
 }
 
+func (i *singleItemMonitor) StopInformer() bool {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	if i.stopped {
+		return false
+	}
+	i.stopped = true
+	close(i.stopCh)
+	klog.Info("informer stopped")
+	return true
+}
+
 func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+	if i.stopped {
+		return nil, fmt.Errorf("can not add hanler %v to already stopped informer", handler)
+	}
+
 	registration, err := i.informer.AddEventHandler(handler)
 	if err != nil {
 		return nil, err
@@ -68,22 +78,17 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 }
 
 func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
-	if err := i.informer.RemoveEventHandler(handle); err != nil {
+	if err := i.informer.RemoveEventHandler(handle.GetHandler()); err != nil {
 		return err
 	}
 	i.numHandlers.Add(-1)
 	return nil
 }
 
-func (i *singleItemMonitor) GetItemKey() string {
-	if keys := strings.Split(i.key.Name, "_"); len(keys) == 1 {
-		return keys[1]
-	}
-
-	return ""
-}
-
-func (i *singleItemMonitor) GetItem() (item interface{}, exists bool, err error) {
-	itemKey := i.GetItemKey()
-	return i.informer.GetStore().Get(fmt.Sprintf("%s/%s", i.key.Namespace, itemKey))
+// GetItem returns the accumulator from a given itemName
+// which denotes metadata.name of a resource being monitorned
+// by informer, and may not be always i.key.Name
+func (i *singleItemMonitor) GetItem(itemName string) (item interface{}, exists bool, err error) {
+	keyFunc := i.key.Namespace + "/" + itemName
+	return i.informer.GetStore().GetByKey(keyFunc)
 }
