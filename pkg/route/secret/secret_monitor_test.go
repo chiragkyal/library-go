@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 )
@@ -117,39 +118,79 @@ func TestGetSecret(t *testing.T) {
 		testNamespace  = "testNamespace"
 		testSecretName = "testSecretName"
 		testRouteName  = "testRouteName"
+		secret         = fakeSecret(testNamespace, testSecretName)
 	)
 
-	secret := fakeSecret(testNamespace, testSecretName)
-	fakeKubeClient := fake.NewSimpleClientset(secret)
-	fakeInformer := func() cache.SharedInformer {
-		return fakeSecretInformer(context.Background(), fakeKubeClient, testNamespace, "wrong")
+	scenarios := []struct {
+		name                  string
+		isNilHandler          bool
+		withSecret            bool
+		expectSecretFromCache *corev1.Secret
+		expectErr             bool
+	}{
+		{
+			name:                  "secret exists in cluster but nil handler is provided",
+			isNilHandler:          true,
+			withSecret:            true,
+			expectSecretFromCache: nil,
+			expectErr:             true,
+		},
+		{
+			// this case may occur when handler is not removed correctly
+			// when secret gets deleted
+			name:                  "secret does not exist in cluster and correct handler is provided",
+			withSecret:            false,
+			expectSecretFromCache: nil,
+			expectErr:             true,
+		},
+		{
+			name:                  "secret exists and correct handler is provided",
+			withSecret:            true,
+			expectSecretFromCache: secret,
+			expectErr:             false,
+		},
 	}
 
-	key := NewObjectKey(testNamespace, testRouteName+"_"+testSecretName)
-	sm := secretMonitor{
-		kubeClient: fakeKubeClient,
-		monitors:   map[ObjectKey]*singleItemMonitor{},
-	}
-	h, err := sm.addSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			var fakeKubeClient *fake.Clientset
+			if s.withSecret {
+				fakeKubeClient = fake.NewSimpleClientset(secret)
+			} else {
+				fakeKubeClient = fake.NewSimpleClientset()
+			}
 
-	if err != nil {
-		t.Error(err)
-	}
-	if !cache.WaitForCacheSync(context.Background().Done(), h.HasSynced) {
-		t.Fatal("cache not synced yet")
-	}
+			fakeInformer := func() cache.SharedInformer {
+				return fakeSecretInformer(context.TODO(), fakeKubeClient, testNamespace, testSecretName)
+			}
+			key := NewObjectKey(testNamespace, testRouteName+"_"+testSecretName)
+			sm := secretMonitor{
+				kubeClient: fakeKubeClient,
+				monitors:   map[ObjectKey]*singleItemMonitor{},
+			}
+			h, err := sm.addSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
+			if err != nil {
+				t.Error(err)
+			}
 
-	// fakeKubeClient.CoreV1().Secrets(testNamespace).Create(context.Background(), &corev1.Secret{
-	// 	ObjectMeta: metav1.ObjectMeta{
-	// 		Name: "something",
-	// 	},
-	// }, metav1.CreateOptions{})
+			if !cache.WaitForCacheSync(context.Background().Done(), h.HasSynced) {
+				t.Error("cache not synced yet")
+			}
 
-	gotSec, gotErr := sm.GetSecret(h)
-	if gotErr != nil {
-		t.Errorf("unexpected error %v", gotErr)
-	}
-	if !reflect.DeepEqual(secret, gotSec) {
-		t.Errorf("expected %v got %v", secret, gotSec)
+			if s.isNilHandler {
+				h = nil
+			}
+
+			gotSec, gotErr := sm.GetSecret(h)
+			if gotErr != nil && !s.expectErr {
+				t.Errorf("unexpected error %v", gotErr)
+			}
+			if gotErr == nil && s.expectErr {
+				t.Errorf("expecting an error, got nil")
+			}
+			if !reflect.DeepEqual(s.expectSecretFromCache, gotSec) {
+				t.Errorf("expected %v got %v", s.expectSecretFromCache, gotSec)
+			}
+		})
 	}
 }

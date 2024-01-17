@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +20,7 @@ func fakeMonitor(ctx context.Context, fakeKubeClient *fake.Clientset, key Object
 	return newSingleItemMonitor(key, sharedInformer)
 }
 
+// fakeSecretInformer will list/watch only one secret inside a namespace
 func fakeSecretInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace, name string) cache.SharedInformer {
 	fieldSelector := fields.OneTermEqualSelector("metadata.name", name).String()
 	klog.Info(fieldSelector)
@@ -35,7 +35,7 @@ func fakeSecretInformer(ctx context.Context, fakeKubeClient *fake.Clientset, nam
 		},
 	},
 		&corev1.Secret{},
-		1*time.Second,
+		0,
 	)
 }
 
