@@ -8,7 +8,6 @@ import (
 	routev1 "github.com/openshift/api/route/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -50,16 +49,18 @@ func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Ma
 	return m
 }
 
-func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
+func (m *Manager) RegisterRoute(parent *routev1.Route) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
+	var secretName string
 
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
+	if parent.Spec.TLS.ExternalCertificate != nil && len(parent.Spec.TLS.ExternalCertificate.Name) > 0 {
+		secretName = parent.Spec.TLS.ExternalCertificate.Name
+	} else {
+		return apierrors.NewInternalError(fmt.Errorf("unable to get secret name from route %v", parent))
+	}
+
 	key := generateKey(parent.Namespace, parent.Name, secretName)
 
 	handlerRegistration, err := m.monitor.AddSecretEventHandler(key.Namespace, key.Name, m.secretHandler)
@@ -72,30 +73,29 @@ func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func
 	return nil
 }
 
-func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
+func (m *Manager) UnregisterRoute(parent *routev1.Route) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
+	var secretName string
 
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
+	if parent.Spec.TLS.ExternalCertificate != nil && len(parent.Spec.TLS.ExternalCertificate.Name) > 0 {
+		secretName = parent.Spec.TLS.ExternalCertificate.Name
+	} else {
+		return apierrors.NewInternalError(fmt.Errorf("unable to get secret name from route %v", parent))
+	}
+
 	key := generateKey(parent.Namespace, parent.Name, secretName)
-	klog.Info("trying to UnregisterRoute with key", key)
 
 	// grab registered handler
 	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
-		//return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
 		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
 	}
 
 	klog.Info("trying to remove handler with key", key)
 	err := m.monitor.RemoveSecretEventHandler(handlerRegistration)
 	if err != nil {
-		// return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
 		return apierrors.NewInternalError(err)
 	}
 
@@ -106,28 +106,26 @@ func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects fu
 	return nil
 }
 
-// Get secret object from informer's cache.
-// It will first check HasSynced()
 func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
+	var secretName string
 
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
+	if parent.Spec.TLS.ExternalCertificate != nil && len(parent.Spec.TLS.ExternalCertificate.Name) > 0 {
+		secretName = parent.Spec.TLS.ExternalCertificate.Name
+	} else {
+		return nil, apierrors.NewInternalError(fmt.Errorf("unable to get secret name from route %v", parent))
+	}
 
 	key := generateKey(parent.Namespace, parent.Name, secretName)
-	handlerRegistration, exists := m.registeredHandlers[key]
 
+	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
-		//return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
 		return nil, apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
 	}
 
-	// check if informer store synced or not, to load secret
+	// wait for informer store sync, to load secret
 	if err := wait.PollImmediate(10*time.Millisecond, time.Second, func() (done bool, err error) { return handlerRegistration.HasSynced(), nil }); err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
