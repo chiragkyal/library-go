@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	routev1 "github.com/openshift/api/route/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -18,7 +17,7 @@ import (
 type Manager struct {
 	monitor SecretMonitor
 	// map of handlerRegistrations
-	registeredHandlers map[ObjectKey]SecretEventHandlerRegistration
+	registeredHandlers map[string]SecretEventHandlerRegistration
 
 	lock sync.RWMutex
 
@@ -33,7 +32,7 @@ func NewManager(kubeClient *kubernetes.Clientset, queue workqueue.RateLimitingIn
 		monitor:            NewSecretMonitor(kubeClient),
 		lock:               sync.RWMutex{},
 		resourceChanges:    queue,
-		registeredHandlers: make(map[ObjectKey]SecretEventHandlerRegistration),
+		registeredHandlers: make(map[string]SecretEventHandlerRegistration),
 
 		// default secret handler
 		secretHandler: cache.ResourceEventHandlerFuncs{
@@ -49,48 +48,37 @@ func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Ma
 	return m
 }
 
-func (m *Manager) RegisterRoute(parent *routev1.Route) error {
+func (m *Manager) RegisterRoute(namespace, routeName, secretName string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	var secretName string
-
-	if parent.Spec.TLS.ExternalCertificate != nil && len(parent.Spec.TLS.ExternalCertificate.Name) > 0 {
-		secretName = parent.Spec.TLS.ExternalCertificate.Name
-	} else {
-		return apierrors.NewInternalError(fmt.Errorf("unable to get secret name from route %v", parent))
+	// each route (namespace/routeName) should be registered only once with any secret.
+	// Note: inside a namespace multiple different routes can be registered(watch) with a common secret
+	key := generateKey(namespace, routeName)
+	if _, exists := m.registeredHandlers[key]; exists {
+		return apierrors.NewInternalError(fmt.Errorf("route already registered with key %s", key))
 	}
 
-	key := generateKey(parent.Namespace, parent.Name, secretName)
-
-	handlerRegistration, err := m.monitor.AddSecretEventHandler(key.Namespace, key.Name, m.secretHandler)
+	handlerRegistration, err := m.monitor.AddSecretEventHandler(namespace, secretName, m.secretHandler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}
 	m.registeredHandlers[key] = handlerRegistration
-	klog.Info("secret manager registered route ", key)
+	klog.Info(fmt.Sprintf("secret manager registered route for key %s with secret %s", key, secretName))
 
 	return nil
 }
 
-func (m *Manager) UnregisterRoute(parent *routev1.Route) error {
+func (m *Manager) UnregisterRoute(namespace, routeName string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	var secretName string
-
-	if parent.Spec.TLS.ExternalCertificate != nil && len(parent.Spec.TLS.ExternalCertificate.Name) > 0 {
-		secretName = parent.Spec.TLS.ExternalCertificate.Name
-	} else {
-		return apierrors.NewInternalError(fmt.Errorf("unable to get secret name from route %v", parent))
-	}
-
-	key := generateKey(parent.Namespace, parent.Name, secretName)
+	key := generateKey(namespace, routeName)
 
 	// grab registered handler
 	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
-		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
+		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key))
 	}
 
 	klog.Info("trying to remove handler with key", key)
@@ -106,23 +94,15 @@ func (m *Manager) UnregisterRoute(parent *routev1.Route) error {
 	return nil
 }
 
-func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
+func (m *Manager) GetSecret(namespace, routeName string) (*v1.Secret, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	var secretName string
-
-	if parent.Spec.TLS.ExternalCertificate != nil && len(parent.Spec.TLS.ExternalCertificate.Name) > 0 {
-		secretName = parent.Spec.TLS.ExternalCertificate.Name
-	} else {
-		return nil, apierrors.NewInternalError(fmt.Errorf("unable to get secret name from route %v", parent))
-	}
-
-	key := generateKey(parent.Namespace, parent.Name, secretName)
+	key := generateKey(namespace, routeName)
 
 	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
-		return nil, apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
+		return nil, apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key))
 	}
 
 	// wait for informer store sync, to load secret
@@ -138,9 +118,6 @@ func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
 	return obj, nil
 }
 
-func generateKey(namespace, routeName, secretName string) ObjectKey {
-	return NewObjectKey(
-		namespace,
-		fmt.Sprintf("%s_%s", routeName, secretName),
-	)
+func generateKey(namespace, route string) string {
+	return fmt.Sprintf("%s/%s", namespace, route)
 }

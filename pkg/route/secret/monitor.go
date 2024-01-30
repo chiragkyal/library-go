@@ -11,7 +11,8 @@ import (
 
 type ObjectKey struct {
 	Namespace string
-	Name      string
+	// Name denotes metadata.name of a resource being monitorned by informer
+	Name string
 }
 
 type singleItemMonitor struct {
@@ -61,6 +62,9 @@ func (i *singleItemMonitor) StopInformer() bool {
 }
 
 func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
 	if i.stopped {
 		return nil, fmt.Errorf("can not add hanler %v to already stopped informer", handler)
 	}
@@ -78,6 +82,11 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 }
 
 func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	// TODO worth checking i.stopped{} ?
+
 	if err := i.informer.RemoveEventHandler(handle.GetHandler()); err != nil {
 		return err
 	}
@@ -88,6 +97,7 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 // GetItem returns the accumulator from a given itemName
 // which denotes metadata.name of a resource being monitorned
 // by informer, and may not be always i.key.Name
+// TODO: itemName should be same as i.key.Name
 func (i *singleItemMonitor) GetItem(itemName string) (item interface{}, exists bool, err error) {
 	keyFunc := i.key.Namespace + "/" + itemName
 	return i.informer.GetStore().GetByKey(keyFunc)
