@@ -45,6 +45,10 @@ func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Ma
 	return m
 }
 
+func (m *Manager) Queue() workqueue.RateLimitingInterface {
+	return m.resourceChanges
+}
+
 func (m *Manager) RegisterRoute(namespace, routeName, secretName string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()

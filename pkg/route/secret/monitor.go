@@ -14,7 +14,7 @@ import (
 type ObjectKey struct {
 	// Namespace is the namespace in which the resource is located.
 	Namespace string
-	// Name denotes metadata.name of a resource being monitorned by informer
+	// Name denotes metadata.name of a resource being monitored by informer
 	Name string
 }
 
