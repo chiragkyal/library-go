@@ -11,30 +11,33 @@ import (
 )
 
 func TestAddSecretEventHandler(t *testing.T) {
+	var (
+		namespace  = "ns"
+		secretName = "secret"
+	)
+
 	scenarios := []struct {
-		name            string
-		routeSecretName string
-		expectErr       bool
+		name              string
+		handler           cache.ResourceEventHandler
+		numInvocation     int
+		expectNumHandlers int32
+		expectKey         ObjectKey
+		expectErr         int
 	}{
 		{
-			name:            "invalid routeSecretName: r_",
-			routeSecretName: "r_",
-			expectErr:       true,
+			name:              "nil handler is provided",
+			handler:           nil,
+			numInvocation:     1,
+			expectNumHandlers: 0,
+			expectErr:         1,
 		},
 		{
-			name:            "invalid routeSecretName: _s",
-			routeSecretName: "_s",
-			expectErr:       true,
-		},
-		{
-			name:            "invalid routeSecretName: rs",
-			routeSecretName: "rs",
-			expectErr:       true,
-		},
-		{
-			name:            "valid routeSecretName",
-			routeSecretName: "r_s",
-			expectErr:       false,
+			name:              "correct handler is provided",
+			handler:           cache.ResourceEventHandlerFuncs{},
+			numInvocation:     2,
+			expectKey:         NewObjectKey(namespace, secretName),
+			expectNumHandlers: 2,
+			expectErr:         0,
 		},
 	}
 
@@ -42,24 +45,29 @@ func TestAddSecretEventHandler(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			fakeInformer := func() cache.SharedInformer {
-				return fakeSecretInformer(context.Background(), fakeKubeClient, "ns", "name")
+				return fakeSecretInformer(context.Background(), fakeKubeClient, namespace, secretName)
 			}
-			key := NewObjectKey("ns", s.routeSecretName)
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
 				monitors:   map[ObjectKey]*singleItemMonitor{},
 			}
 
-			_, gotErr := sm.addSecretEventHandler("ns", s.routeSecretName, cache.ResourceEventHandlerFuncs{}, fakeInformer)
-			if gotErr != nil && !s.expectErr {
-				t.Errorf("unexpected error %v", gotErr)
+			gotErr := 0
+			for i := 0; i < s.numInvocation; i++ {
+				if _, err := sm.addSecretEventHandler(namespace, secretName, s.handler, fakeInformer); err != nil {
+					gotErr += 1
+				}
 			}
-			if gotErr == nil && s.expectErr {
-				t.Errorf("expecting an error, got nil")
+			if gotErr != s.expectErr {
+				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
 			}
-			if !s.expectErr {
-				if _, exist := sm.monitors[key]; !exist {
-					t.Error("monitor should be added into map", key)
+
+			if s.expectErr == 0 {
+				if _, exist := sm.monitors[s.expectKey]; !exist {
+					t.Fatal("monitor key should be added into map", s.expectKey)
+				}
+				if sm.monitors[s.expectKey].numHandlers.Load() != s.expectNumHandlers {
+					t.Errorf("expected %d handlers, got %d handlers", s.expectNumHandlers, sm.monitors[s.expectKey].numHandlers.Load())
 				}
 			}
 		})
@@ -70,11 +78,17 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 	scenarios := []struct {
 		name         string
 		isNilHandler bool
+		isKeyRemoved bool
 		expectErr    bool
 	}{
 		{
 			name:         "nil secret handler is provided",
 			isNilHandler: true,
+			expectErr:    true,
+		},
+		{
+			name:         "secret monitor key already removed",
+			isKeyRemoved: true,
 			expectErr:    true,
 		},
 		{
@@ -89,7 +103,7 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 			fakeInformer := func() cache.SharedInformer {
 				return fakeSecretInformer(context.Background(), fakeKubeClient, "ns", "name")
 			}
-			key := NewObjectKey("ns", "r_s")
+			key := NewObjectKey("ns", "secret")
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
 				monitors:   map[ObjectKey]*singleItemMonitor{},
@@ -100,6 +114,9 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 			}
 			if s.isNilHandler {
 				h = nil
+			}
+			if s.isKeyRemoved {
+				delete(sm.monitors, key)
 			}
 
 			gotErr := sm.RemoveSecretEventHandler(h)
@@ -117,7 +134,6 @@ func TestGetSecret(t *testing.T) {
 	var (
 		testNamespace  = "testNamespace"
 		testSecretName = "testSecretName"
-		testRouteName  = "testRouteName"
 		secret         = fakeSecret(testNamespace, testSecretName)
 	)
 
@@ -163,7 +179,7 @@ func TestGetSecret(t *testing.T) {
 			fakeInformer := func() cache.SharedInformer {
 				return fakeSecretInformer(context.TODO(), fakeKubeClient, testNamespace, testSecretName)
 			}
-			key := NewObjectKey(testNamespace, testRouteName+"_"+testSecretName)
+			key := NewObjectKey(testNamespace, testSecretName)
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
 				monitors:   map[ObjectKey]*singleItemMonitor{},

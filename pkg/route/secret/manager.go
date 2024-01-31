@@ -24,7 +24,8 @@ type Manager struct {
 	// monitors are the producer of the resourceChanges queue
 	resourceChanges workqueue.RateLimitingInterface
 
-	secretHandler cache.ResourceEventHandlerFuncs
+	// secretHandler cache.ResourceEventHandlerFuncs
+	secretHandler cache.ResourceEventHandler
 }
 
 func NewManager(kubeClient *kubernetes.Clientset, queue workqueue.RateLimitingInterface) *Manager {
@@ -35,11 +36,7 @@ func NewManager(kubeClient *kubernetes.Clientset, queue workqueue.RateLimitingIn
 		registeredHandlers: make(map[string]SecretEventHandlerRegistration),
 
 		// default secret handler
-		secretHandler: cache.ResourceEventHandlerFuncs{
-			AddFunc:    func(obj interface{}) {},
-			UpdateFunc: func(oldObj, newObj interface{}) {},
-			DeleteFunc: func(obj interface{}) {},
-		},
+		secretHandler: nil,
 	}
 }
 

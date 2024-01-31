@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -69,6 +70,10 @@ func (s *secretMonitor) addSecretEventHandler(namespace, secretName string, hand
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	if handler == nil {
+		return nil, fmt.Errorf("nil handler is provided")
+	}
+
 	// secret identifier (namespace/secret)
 	key := NewObjectKey(namespace, secretName)
 
@@ -99,6 +104,11 @@ func (s *secretMonitor) addSecretEventHandler(namespace, secretName string, hand
 		m = newSingleItemMonitor(key, sharedInformer)
 		go m.StartInformer()
 
+		// wait for first sync
+		if !cache.WaitForCacheSync(context.Background().Done(), m.HasSynced) {
+			return nil, fmt.Errorf("failed waiting for cache sync")
+		}
+
 		// add item key to monitors map // add watch to the list
 		s.monitors[key] = m
 
@@ -127,9 +137,7 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 	// check if secret informer already exists for the secret(key)
 	m, exists := s.monitors[key]
 	if !exists {
-		klog.Info("secret monitor already removed", " item key", key)
-		return nil
-		// TODO return error
+		return fmt.Errorf("secret monitor already removed for item key %v", key)
 	}
 
 	if err := m.RemoveEventHandler(handlerRegistration); err != nil {
@@ -166,8 +174,7 @@ func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistra
 		return nil, fmt.Errorf("secret monitor doesn't exist for key %v", key)
 	}
 
-	// TODO: secretName should not be required
-	uncast, exists, err := m.GetItem(secretName)
+	uncast, exists, err := m.GetItem()
 	if !exists {
 		return nil, fmt.Errorf("secret %s doesn't exist in cache", secretName)
 	}

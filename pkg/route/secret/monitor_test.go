@@ -194,9 +194,16 @@ func TestRemoveEventHandler(t *testing.T) {
 	scenarios := []struct {
 		name         string
 		isNilHandler bool
+		isStop       bool
 		numhandler   int32
 		expectErr    bool
 	}{
+		{
+			name:       "remove handler from stopped informer",
+			isStop:     true,
+			numhandler: 1,
+			expectErr:  true,
+		},
 		{
 			name:         "nil handler is provided",
 			isNilHandler: true,
@@ -218,6 +225,10 @@ func TestRemoveEventHandler(t *testing.T) {
 			handlerRegistration, _ := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 			if s.isNilHandler {
 				handlerRegistration = nil
+			}
+
+			if s.isStop {
+				monitor.StopInformer()
 			}
 
 			// for handling nil pointer dereference
@@ -246,22 +257,23 @@ func TestGetItem(t *testing.T) {
 	var (
 		namespace = "sandbox"
 		name      = "secretName"
+		secret    = fakeSecret(namespace, name)
 	)
 	scenarios := []struct {
 		name            string
-		itemName        string
+		withSecret      bool
 		expectExist     bool
 		expectUncastErr bool
 	}{
 		{
-			name:            "looking for item which is not present",
-			itemName:        "wrongName",
+			name:            "looking for secret which is not present",
+			withSecret:      false,
 			expectExist:     false,
 			expectUncastErr: true,
 		},
 		{
-			name:            "looking for correct item",
-			itemName:        name,
+			name:            "looking for correct secret",
+			withSecret:      true,
 			expectExist:     true,
 			expectUncastErr: false,
 		},
@@ -269,8 +281,13 @@ func TestGetItem(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			secret := fakeSecret(namespace, name)
-			fakeKubeClient := fake.NewSimpleClientset(secret)
+			var fakeKubeClient *fake.Clientset
+			if s.withSecret {
+				fakeKubeClient = fake.NewSimpleClientset(secret)
+			} else {
+				fakeKubeClient = fake.NewSimpleClientset()
+			}
+
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, NewObjectKey(namespace, name))
 
 			go monitor.StartInformer()
@@ -278,7 +295,7 @@ func TestGetItem(t *testing.T) {
 				t.Fatal("cache not synced yet")
 			}
 
-			uncast, exists, err := monitor.GetItem(s.itemName)
+			uncast, exists, err := monitor.GetItem()
 
 			if err != nil {
 				t.Error(err)

@@ -9,7 +9,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// ObjectKey represents the unique identifier for a resource.
+// It is used during reading from the cache to uniquely identify and retrieve resources.
 type ObjectKey struct {
+	// Namespace is the namespace in which the resource is located.
 	Namespace string
 	// Name denotes metadata.name of a resource being monitorned by informer
 	Name string
@@ -85,7 +88,9 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
-	// TODO worth checking i.stopped{} ?
+	if i.stopped {
+		return fmt.Errorf("can not remove handler %v from stopped informer", handle.GetHandler())
+	}
 
 	if err := i.informer.RemoveEventHandler(handle.GetHandler()); err != nil {
 		return err
@@ -94,11 +99,9 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 	return nil
 }
 
-// GetItem returns the accumulator from a given itemName
-// which denotes metadata.name of a resource being monitorned
-// by informer, and may not be always i.key.Name
-// TODO: itemName should be same as i.key.Name
-func (i *singleItemMonitor) GetItem(itemName string) (item interface{}, exists bool, err error) {
-	keyFunc := i.key.Namespace + "/" + itemName
+// GetItem returns the accumulator being monitored
+// by informer, using keyFunc namespace/name
+func (i *singleItemMonitor) GetItem() (item interface{}, exists bool, err error) {
+	keyFunc := i.key.Namespace + "/" + i.key.Name
 	return i.informer.GetStore().GetByKey(keyFunc)
 }
