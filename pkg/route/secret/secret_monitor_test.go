@@ -45,7 +45,7 @@ func TestAddSecretEventHandler(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			fakeInformer := func() cache.SharedInformer {
-				return fakeSecretInformer(context.Background(), fakeKubeClient, namespace, secretName)
+				return fakeSecretInformer(context.TODO(), fakeKubeClient, namespace, secretName)
 			}
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
@@ -54,7 +54,7 @@ func TestAddSecretEventHandler(t *testing.T) {
 
 			gotErr := 0
 			for i := 0; i < s.numInvocation; i++ {
-				if _, err := sm.addSecretEventHandler(namespace, secretName, s.handler, fakeInformer); err != nil {
+				if _, err := sm.addSecretEventHandler(context.TODO(), namespace, secretName, s.handler, fakeInformer); err != nil {
 					gotErr += 1
 				}
 			}
@@ -101,14 +101,14 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			fakeInformer := func() cache.SharedInformer {
-				return fakeSecretInformer(context.Background(), fakeKubeClient, "ns", "name")
+				return fakeSecretInformer(context.TODO(), fakeKubeClient, "ns", "name")
 			}
 			key := NewObjectKey("ns", "secret")
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
 				monitors:   map[ObjectKey]*singleItemMonitor{},
 			}
-			h, err := sm.addSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
+			h, err := sm.addSecretEventHandler(context.TODO(), key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
 			if err != nil {
 				t.Error(err)
 			}
@@ -184,7 +184,7 @@ func TestGetSecret(t *testing.T) {
 				kubeClient: fakeKubeClient,
 				monitors:   map[ObjectKey]*singleItemMonitor{},
 			}
-			h, err := sm.addSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
+			h, err := sm.addSecretEventHandler(context.TODO(), key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
 			if err != nil {
 				t.Error(err)
 			}

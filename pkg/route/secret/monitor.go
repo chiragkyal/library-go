@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,8 +10,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ObjectKey represents the unique identifier for a resource.
-// It is used during reading from the cache to uniquely identify and retrieve resources.
+// ObjectKey represents the unique identifier for a resource, used to access it in the cache.
 type ObjectKey struct {
 	// Namespace is the namespace in which the resource is located.
 	Namespace string
@@ -18,6 +18,7 @@ type ObjectKey struct {
 	Name string
 }
 
+// singleItemMonitor monitors a single resource using a SharedInformer.
 type singleItemMonitor struct {
 	key         ObjectKey
 	informer    cache.SharedInformer
@@ -27,6 +28,7 @@ type singleItemMonitor struct {
 	stopCh      chan struct{}
 }
 
+// NewObjectKey creates a new ObjectKey for the given namespace and name.
 func NewObjectKey(namespace, name string) ObjectKey {
 	return ObjectKey{
 		Namespace: namespace,
@@ -34,23 +36,55 @@ func NewObjectKey(namespace, name string) ObjectKey {
 	}
 }
 
+// newSingleItemMonitor creates a new singleItemMonitor for the given key and informer.
 func newSingleItemMonitor(key ObjectKey, informer cache.SharedInformer) *singleItemMonitor {
 	return &singleItemMonitor{
 		key:      key,
 		informer: informer,
+		stopped:  true,
 		stopCh:   make(chan struct{}),
 	}
 }
 
+// HasSynced returns true if the informer's cache has been successfully synced.
 func (i *singleItemMonitor) HasSynced() bool {
 	return i.informer.HasSynced()
 }
 
-func (i *singleItemMonitor) StartInformer() {
+// StartInformer starts and runs the informer util the provided context is canceled,
+// or StopInformer() is called. It will block, so call via goroutine.
+func (i *singleItemMonitor) StartInformer(ctx context.Context) {
+	i.lock.Lock()
+
+	if !i.stopped {
+		klog.Warning("informer is already running")
+		i.lock.Unlock()
+		return
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			klog.Info("stopping informer due to context cancellation")
+			if !i.StopInformer() {
+				klog.Error("failed to stop informer")
+			}
+		// this case is required to exit from the goroutine
+		// after normal StopInformer() call
+		case <-i.stopCh:
+			klog.Info("successfully stopped")
+		}
+	}()
+
 	klog.Info("starting informer")
+	i.stopped = false
+	i.lock.Unlock()
+
 	i.informer.Run(i.stopCh)
 }
 
+// StopInformer stops the informer.
+// Retuns false if called twice, or before StartInformer(); true otherwise.
 func (i *singleItemMonitor) StopInformer() bool {
 	i.lock.Lock()
 	defer i.lock.Unlock()
@@ -59,11 +93,13 @@ func (i *singleItemMonitor) StopInformer() bool {
 		return false
 	}
 	i.stopped = true
-	close(i.stopCh)
+	close(i.stopCh) // Signal the informer to stop
 	klog.Info("informer stopped")
 	return true
 }
 
+// AddEventHandler adds an event handler to the informer and returns
+// secretEventHandlerRegistration after populating objectKey and registration.
 func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
@@ -84,6 +120,7 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 	}, nil
 }
 
+// RemoveEventHandler removes an event handler from the informer.
 func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
 	i.lock.Lock()
 	defer i.lock.Unlock()
@@ -100,7 +137,7 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 }
 
 // GetItem returns the accumulator being monitored
-// by informer, using keyFunc namespace/name
+// by informer, using keyFunc (namespace/name).
 func (i *singleItemMonitor) GetItem() (item interface{}, exists bool, err error) {
 	keyFunc := i.key.Namespace + "/" + i.key.Name
 	return i.informer.GetStore().GetByKey(keyFunc)

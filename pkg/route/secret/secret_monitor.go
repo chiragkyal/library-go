@@ -22,7 +22,7 @@ type SecretEventHandlerRegistration interface {
 
 type SecretMonitor interface {
 	//
-	AddSecretEventHandler(namespace, secretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
+	AddSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
 	//
 	RemoveSecretEventHandler(SecretEventHandlerRegistration) error
 	//
@@ -60,13 +60,13 @@ func NewSecretMonitor(kubeClient kubernetes.Interface) SecretMonitor {
 }
 
 // create secret watch.
-func (s *secretMonitor) AddSecretEventHandler(namespace, secretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
-	return s.addSecretEventHandler(namespace, secretName, handler, nil)
+func (s *secretMonitor) AddSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+	return s.addSecretEventHandler(ctx, namespace, secretName, handler, nil)
 }
 
 // addSecretEventHandler should only be used directly for tests. For production use AddSecretEventHandler().
 // createInformerFn helps in mocking sharedInformer for unit tests.
-func (s *secretMonitor) addSecretEventHandler(namespace, secretName string, handler cache.ResourceEventHandler, createInformerFn func() cache.SharedInformer) (SecretEventHandlerRegistration, error) {
+func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler, createInformerFn func() cache.SharedInformer) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -102,7 +102,7 @@ func (s *secretMonitor) addSecretEventHandler(namespace, secretName string, hand
 		}
 
 		m = newSingleItemMonitor(key, sharedInformer)
-		go m.StartInformer()
+		go m.StartInformer(ctx)
 
 		// wait for first sync
 		if !cache.WaitForCacheSync(context.Background().Done(), m.HasSynced) {
@@ -118,7 +118,7 @@ func (s *secretMonitor) addSecretEventHandler(namespace, secretName string, hand
 	// secret informer already started, just add the handler
 	klog.Info("secret handler added", " item key ", key)
 
-	return m.AddEventHandler(handler) // also populate key inside secretEventHandlerRegistration
+	return m.AddEventHandler(handler)
 }
 
 // Remove secret watch

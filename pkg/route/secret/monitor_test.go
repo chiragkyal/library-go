@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,7 +82,8 @@ func TestStartInformer(t *testing.T) {
 			if s.isClosed {
 				close(monitor.stopCh)
 			}
-			go monitor.StartInformer()
+			go monitor.StartInformer(context.TODO())
+			time.Sleep(10 * time.Millisecond)
 
 			select {
 			// this case will execute if stopCh is closed
@@ -98,19 +100,31 @@ func TestStartInformer(t *testing.T) {
 
 func TestStopInformer(t *testing.T) {
 	scenarios := []struct {
-		name           string
-		alreadyStopped bool
-		expect         bool
+		name             string
+		withStart        bool
+		alreadyStopped   bool
+		expectStopped    bool
+		expectChanClosed bool
 	}{
 		{
-			name:           "stopping already stopped informer",
-			alreadyStopped: true,
-			expect:         false,
+			name:             "stop without starting informer",
+			withStart:        false,
+			expectStopped:    false,
+			expectChanClosed: false,
 		},
 		{
-			name:           "correctly stopped informer",
-			alreadyStopped: false,
-			expect:         true,
+			name:             "stopping already stopped informer",
+			withStart:        true,
+			alreadyStopped:   true,
+			expectStopped:    false,
+			expectChanClosed: true,
+		},
+		{
+			name:             "correctly stopped informer",
+			withStart:        true,
+			alreadyStopped:   false,
+			expectStopped:    true,
+			expectChanClosed: true,
 		},
 	}
 
@@ -118,23 +132,50 @@ func TestStopInformer(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
-			go monitor.StartInformer()
 
+			if s.withStart {
+				go monitor.StartInformer(context.TODO())
+				time.Sleep(10 * time.Millisecond)
+			}
 			if s.alreadyStopped {
 				monitor.StopInformer()
 			}
-			if monitor.StopInformer() != s.expect {
+
+			if monitor.StopInformer() != s.expectStopped {
 				t.Error("unexpected result")
 			}
 
+			var chanClosed bool
 			select {
 			// this case will execute if stopCh is closed
 			case <-monitor.stopCh:
-				t.Log("informer successfully stopped")
+				chanClosed = true
 			default:
-				t.Error("informer is still running")
+				chanClosed = false
+			}
+
+			if s.expectChanClosed != chanClosed {
+				t.Error("unexpected result on chan closure")
 			}
 		})
+	}
+}
+
+func TestStopWithContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	fakeKubeClient := fake.NewSimpleClientset()
+	monitor := fakeMonitor(ctx, fakeKubeClient, ObjectKey{})
+
+	go monitor.StartInformer(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// cancel the context to stop the informer
+	cancel()
+	time.Sleep(10 * time.Millisecond)
+
+	// again stopping should deny
+	if monitor.StopInformer() != false {
+		t.Error("context cancellation did not work properly")
 	}
 }
 
@@ -164,7 +205,8 @@ func TestAddEventHandler(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			key := NewObjectKey("namespace", "name")
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, key)
-			go monitor.StartInformer()
+			go monitor.StartInformer(context.TODO())
+			time.Sleep(10 * time.Millisecond)
 
 			if s.isStop {
 				monitor.StopInformer()
@@ -222,6 +264,9 @@ func TestRemoveEventHandler(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
+			go monitor.StartInformer(context.TODO())
+			time.Sleep(10 * time.Millisecond)
+
 			handlerRegistration, _ := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 			if s.isNilHandler {
 				handlerRegistration = nil
@@ -290,7 +335,7 @@ func TestGetItem(t *testing.T) {
 
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, NewObjectKey(namespace, name))
 
-			go monitor.StartInformer()
+			go monitor.StartInformer(context.TODO())
 			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
 				t.Fatal("cache not synced yet")
 			}

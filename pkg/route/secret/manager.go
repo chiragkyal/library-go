@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -49,7 +50,7 @@ func (m *Manager) Queue() workqueue.RateLimitingInterface {
 	return m.resourceChanges
 }
 
-func (m *Manager) RegisterRoute(namespace, routeName, secretName string) error {
+func (m *Manager) RegisterRoute(ctx context.Context, namespace, routeName, secretName string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -60,7 +61,7 @@ func (m *Manager) RegisterRoute(namespace, routeName, secretName string) error {
 		return apierrors.NewInternalError(fmt.Errorf("route already registered with key %s", key))
 	}
 
-	handlerRegistration, err := m.monitor.AddSecretEventHandler(namespace, secretName, m.secretHandler)
+	handlerRegistration, err := m.monitor.AddSecretEventHandler(ctx, namespace, secretName, m.secretHandler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}
