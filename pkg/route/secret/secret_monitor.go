@@ -7,12 +7,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
 
+// SecretEventHandlerRegistration is for registering and unregistering event handlers for secret monitoring.
 type SecretEventHandlerRegistration interface {
 	cache.ResourceEventHandlerRegistration
 
@@ -20,18 +22,28 @@ type SecretEventHandlerRegistration interface {
 	GetHandler() cache.ResourceEventHandlerRegistration
 }
 
+// SecretMonitor helps in monitoring and handling a specific secret using singleItemMonitor.
 type SecretMonitor interface {
-	//
+	// AddSecretEventHandler adds a secret event handler to the monitor for a specific secret in the given namespace.
+	// The handler will be notified of events related to the "specified" secret only.
+	// The returned SecretEventHandlerRegistration can be used to later remove the handler.
 	AddSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
-	//
+
+	// RemoveSecretEventHandler removes a previously added secret event handler using the provided registration.
+	// If the handler is not found or if there is an issue removing it, an error is returned.
 	RemoveSecretEventHandler(SecretEventHandlerRegistration) error
-	//
+
+	// GetSecret retrieves the secret object from the informer's cache using the provided SecretEventHandlerRegistration.
+	// This allows accessing the latest state of the secret without making an API call.
 	GetSecret(SecretEventHandlerRegistration) (*v1.Secret, error)
 }
 
+// secretEventHandlerRegistration is an implementation of the SecretEventHandlerRegistration.
 type secretEventHandlerRegistration struct {
 	cache.ResourceEventHandlerRegistration
-	// objectKey will populate during AddEventHandler, and will be used during RemoveEventHandler
+
+	// objectKey represents the unique identifier for the secret associated with this event handler registration.
+	// It will be populated during AddEventHandler, and will be used during RemoveEventHandler, GetSecret.
 	objectKey ObjectKey
 }
 
@@ -43,10 +55,10 @@ func (r *secretEventHandlerRegistration) GetHandler() cache.ResourceEventHandler
 	return r.ResourceEventHandlerRegistration
 }
 
+// secretMonitor is an implementation of the SecretMonitor
 type secretMonitor struct {
 	kubeClient kubernetes.Interface
-
-	lock sync.RWMutex
+	lock       sync.RWMutex
 	// monitors is map of singleItemMonitor. Each singleItemMonitor monitors/watches
 	// a secret through individual informer.
 	monitors map[ObjectKey]*singleItemMonitor
@@ -59,13 +71,28 @@ func NewSecretMonitor(kubeClient kubernetes.Interface) SecretMonitor {
 	}
 }
 
-// create secret watch.
+// AddSecretEventHandler adds a secret event handler to the monitor.
 func (s *secretMonitor) AddSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
-	return s.addSecretEventHandler(ctx, namespace, secretName, handler, nil)
+	return s.addSecretEventHandler(ctx, namespace, secretName, handler, s.createSecretInformer(namespace, secretName))
 }
 
-// addSecretEventHandler should only be used directly for tests. For production use AddSecretEventHandler().
-// createInformerFn helps in mocking sharedInformer for unit tests.
+// createSecretInformer creates a SharedInformer for monitoring a specific secret.
+func (s *secretMonitor) createSecretInformer(namespace, name string) func() cache.SharedInformer {
+	return func() cache.SharedInformer {
+		return cache.NewSharedInformer(
+			cache.NewListWatchFromClient(
+				s.kubeClient.CoreV1().RESTClient(),
+				"secrets",
+				namespace,
+				fields.OneTermEqualSelector("metadata.name", name),
+			),
+			&corev1.Secret{},
+			0,
+		)
+	}
+}
+
+// addSecretEventHandler adds a secret event handler and starts the informer if not already running.
 func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler, createInformerFn func() cache.SharedInformer) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -77,30 +104,10 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 	// secret identifier (namespace/secret)
 	key := NewObjectKey(namespace, secretName)
 
-	// check if secret monitor(watch) already exists
+	// start secret informer if monitor does not exists
 	m, exists := s.monitors[key]
-
-	// start secret informer
 	if !exists {
-		var sharedInformer cache.SharedInformer
-		if createInformerFn == nil {
-			// create a single secret monitor
-			sharedInformer = cache.NewSharedInformer(
-				cache.NewListWatchFromClient(
-					s.kubeClient.CoreV1().RESTClient(),
-					"secrets",
-					namespace,
-					fields.OneTermEqualSelector("metadata.name", secretName),
-				),
-				&corev1.Secret{},
-				0,
-			)
-		} else {
-			// only for testability
-			klog.Warning("creating informer for testability")
-			sharedInformer = createInformerFn()
-		}
-
+		sharedInformer := createInformerFn()
 		m = newSingleItemMonitor(key, sharedInformer)
 		go m.StartInformer(ctx)
 
@@ -121,7 +128,8 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 	return m.AddEventHandler(handler)
 }
 
-// Remove secret watch
+// RemoveSecretEventHandler removes a secret event handler and stops the informer if no handlers are left.
+// If the handler is not found or if there is an issue removing it, an error is returned.
 func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEventHandlerRegistration) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -130,7 +138,7 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 		return fmt.Errorf("secret handler is nil")
 	}
 
-	// get the secret identifier linked with handler
+	// Extract the key from the registration to identify the associated monitor.
 	// populated in AddEventHandler()
 	key := handlerRegistration.GetKey()
 
@@ -157,7 +165,7 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 	return nil
 }
 
-// Get the secret object from informer's cache
+// GetSecret retrieves the secret object from the informer's cache. Error if the secret is not found in the cache.
 func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.Secret, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
@@ -176,7 +184,7 @@ func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistra
 
 	uncast, exists, err := m.GetItem()
 	if !exists {
-		return nil, fmt.Errorf("secret %s doesn't exist in cache", secretName)
+		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)
 	}
 
 	if err != nil {

@@ -105,7 +105,7 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 	defer i.lock.Unlock()
 
 	if i.stopped {
-		return nil, fmt.Errorf("can not add hanler %v to already stopped informer", handler)
+		return nil, fmt.Errorf("can not add handler %v to already stopped informer", handler)
 	}
 
 	registration, err := i.informer.AddEventHandler(handler)
