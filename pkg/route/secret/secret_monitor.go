@@ -194,6 +194,11 @@ func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistra
 		return nil, fmt.Errorf("secret monitor doesn't exist for key %v", key)
 	}
 
+	// wait for informer store sync, to load secrets
+	if !cache.WaitForCacheSync(context.Background().Done(), handlerRegistration.HasSynced) {
+		return nil, fmt.Errorf("failed waiting for cache sync")
+	}
+
 	uncast, exists, err := m.itemMonitor.GetItem()
 	if !exists {
 		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)

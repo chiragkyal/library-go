@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -105,11 +103,6 @@ func (m *Manager) GetSecret(namespace, routeName string) (*v1.Secret, error) {
 	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
 		return nil, apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key))
-	}
-
-	// wait for informer store sync, to load secret
-	if err := wait.PollImmediate(10*time.Millisecond, time.Second, func() (done bool, err error) { return handlerRegistration.HasSynced(), nil }); err != nil {
-		return nil, apierrors.NewInternalError(err)
 	}
 
 	obj, err := m.monitor.GetSecret(handlerRegistration)

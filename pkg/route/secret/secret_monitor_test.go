@@ -243,10 +243,6 @@ func TestGetSecret(t *testing.T) {
 				t.Error(err)
 			}
 
-			if !cache.WaitForCacheSync(context.Background().Done(), h.HasSynced) {
-				t.Error("cache not synced yet")
-			}
-
 			if s.isNilHandler {
 				h = nil
 			}
