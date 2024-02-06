@@ -34,9 +34,9 @@ func TestAddSecretEventHandler(t *testing.T) {
 		{
 			name:              "correct handler is provided",
 			handler:           cache.ResourceEventHandlerFuncs{},
-			numInvocation:     2,
+			numInvocation:     5,
 			expectKey:         NewObjectKey(namespace, secretName),
-			expectNumHandlers: 2,
+			expectNumHandlers: 5,
 			expectErr:         0,
 		},
 	}
@@ -49,7 +49,7 @@ func TestAddSecretEventHandler(t *testing.T) {
 			}
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
-				monitors:   map[ObjectKey]*singleItemMonitor{},
+				monitors:   map[ObjectKey]*monitoredItem{},
 			}
 
 			gotErr := 0
@@ -75,25 +75,50 @@ func TestAddSecretEventHandler(t *testing.T) {
 }
 
 func TestRemoveSecretEventHandler(t *testing.T) {
+	var (
+		namespace  = "ns"
+		secretName = "secret"
+	)
 	scenarios := []struct {
-		name         string
-		isNilHandler bool
-		isKeyRemoved bool
-		expectErr    bool
+		name              string
+		numAddition       int
+		numRemoval        int
+		isNilHandler      bool
+		isKeyRemoved      bool
+		expectKeyExist    bool
+		expectNumHandlers int32
+		expectErr         int
 	}{
 		{
-			name:         "nil secret handler is provided",
-			isNilHandler: true,
-			expectErr:    true,
+			name:           "same number of addition and removal",
+			numAddition:    5,
+			numRemoval:     5,
+			expectKeyExist: false,
+			expectErr:      0,
 		},
 		{
-			name:         "secret monitor key already removed",
-			isKeyRemoved: true,
-			expectErr:    true,
+			name:              "less number of removal than addition",
+			numAddition:       5,
+			numRemoval:        3,
+			expectKeyExist:    true,
+			expectNumHandlers: 2, // (numAddition-numRemoval)
+			expectErr:         0,
 		},
 		{
-			name:      "secret handler correctly removed",
-			expectErr: false,
+			name:           "nil handler is provided",
+			numAddition:    2,
+			numRemoval:     3, // will append an extra nil handler
+			isNilHandler:   true,
+			expectKeyExist: false,
+			expectErr:      1,
+		},
+		{
+			name:           "secret monitor key already removed",
+			numAddition:    2,
+			numRemoval:     2,
+			isKeyRemoved:   true,
+			expectKeyExist: false,
+			expectErr:      2, // should be equal to numRemoval
 		},
 	}
 
@@ -101,30 +126,51 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			fakeInformer := func() cache.SharedInformer {
-				return fakeSecretInformer(context.TODO(), fakeKubeClient, "ns", "name")
+				return fakeSecretInformer(context.TODO(), fakeKubeClient, namespace, secretName)
 			}
-			key := NewObjectKey("ns", "secret")
+			key := NewObjectKey(namespace, secretName)
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
-				monitors:   map[ObjectKey]*singleItemMonitor{},
+				monitors:   map[ObjectKey]*monitoredItem{},
 			}
-			h, err := sm.addSecretEventHandler(context.TODO(), key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
-			if err != nil {
-				t.Error(err)
+
+			handlers := []SecretEventHandlerRegistration{}
+			for i := 0; i < s.numAddition; i++ {
+				h, err := sm.addSecretEventHandler(context.TODO(), namespace, secretName, cache.ResourceEventHandlerFuncs{}, fakeInformer)
+				if err != nil {
+					t.Error(err)
+				}
+				handlers = append(handlers, h)
 			}
+
 			if s.isNilHandler {
-				h = nil
+				handlers = append(handlers, nil)
 			}
+
 			if s.isKeyRemoved {
 				delete(sm.monitors, key)
 			}
 
-			gotErr := sm.RemoveSecretEventHandler(h)
-			if gotErr != nil && !s.expectErr {
-				t.Errorf("unexpected error %v", gotErr)
+			gotErr := 0
+			for i := 0; i < s.numRemoval; i++ {
+				if err := sm.RemoveSecretEventHandler(handlers[i]); err != nil {
+					t.Log(err)
+					gotErr += 1
+				}
 			}
-			if gotErr == nil && s.expectErr {
-				t.Errorf("expecting an error, got nil")
+			if gotErr != s.expectErr {
+				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
+			}
+
+			m, exist := sm.monitors[key]
+			if exist != s.expectKeyExist {
+				t.Errorf("expected %t, got %t", s.expectKeyExist, exist)
+			}
+			// check numHandlers is key exists
+			if exist {
+				if m.numHandlers.Load() != s.expectNumHandlers {
+					t.Errorf("expected %d handlers, got %d handlers", s.expectNumHandlers, m.numHandlers.Load())
+				}
 			}
 		})
 	}
@@ -132,14 +178,15 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 
 func TestGetSecret(t *testing.T) {
 	var (
-		testNamespace  = "testNamespace"
-		testSecretName = "testSecretName"
-		secret         = fakeSecret(testNamespace, testSecretName)
+		namespace  = "testNamespace"
+		secretName = "testSecretName"
+		secret     = fakeSecret(namespace, secretName)
 	)
 
 	scenarios := []struct {
 		name                  string
 		isNilHandler          bool
+		isKeyRemoved          bool
 		withSecret            bool
 		expectSecretFromCache *corev1.Secret
 		expectErr             bool
@@ -147,6 +194,13 @@ func TestGetSecret(t *testing.T) {
 		{
 			name:                  "secret exists in cluster but nil handler is provided",
 			isNilHandler:          true,
+			withSecret:            true,
+			expectSecretFromCache: nil,
+			expectErr:             true,
+		},
+		{
+			name:                  "secret monitor key already removed",
+			isKeyRemoved:          true,
 			withSecret:            true,
 			expectSecretFromCache: nil,
 			expectErr:             true,
@@ -177,12 +231,12 @@ func TestGetSecret(t *testing.T) {
 			}
 
 			fakeInformer := func() cache.SharedInformer {
-				return fakeSecretInformer(context.TODO(), fakeKubeClient, testNamespace, testSecretName)
+				return fakeSecretInformer(context.TODO(), fakeKubeClient, namespace, secretName)
 			}
-			key := NewObjectKey(testNamespace, testSecretName)
+			key := NewObjectKey(namespace, secretName)
 			sm := secretMonitor{
 				kubeClient: fakeKubeClient,
-				monitors:   map[ObjectKey]*singleItemMonitor{},
+				monitors:   map[ObjectKey]*monitoredItem{},
 			}
 			h, err := sm.addSecretEventHandler(context.TODO(), key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{}, fakeInformer)
 			if err != nil {
@@ -195,6 +249,9 @@ func TestGetSecret(t *testing.T) {
 
 			if s.isNilHandler {
 				h = nil
+			}
+			if s.isKeyRemoved {
+				delete(sm.monitors, key)
 			}
 
 			gotSec, gotErr := sm.GetSecret(h)

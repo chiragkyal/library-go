@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
@@ -20,12 +19,11 @@ type ObjectKey struct {
 
 // singleItemMonitor monitors a single resource using a SharedInformer.
 type singleItemMonitor struct {
-	key         ObjectKey
-	informer    cache.SharedInformer
-	numHandlers atomic.Int32
-	lock        sync.Mutex
-	stopped     bool
-	stopCh      chan struct{}
+	key      ObjectKey
+	informer cache.SharedInformer
+	lock     sync.Mutex
+	stopped  bool
+	stopCh   chan struct{}
 }
 
 // NewObjectKey creates a new ObjectKey for the given namespace and name.
@@ -112,7 +110,6 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 	if err != nil {
 		return nil, err
 	}
-	i.numHandlers.Add(1)
 
 	return &secretEventHandlerRegistration{
 		ResourceEventHandlerRegistration: registration,
@@ -129,11 +126,7 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 		return fmt.Errorf("can not remove handler %v from stopped informer", handle.GetHandler())
 	}
 
-	if err := i.informer.RemoveEventHandler(handle.GetHandler()); err != nil {
-		return err
-	}
-	i.numHandlers.Add(-1)
-	return nil
+	return i.informer.RemoveEventHandler(handle.GetHandler())
 }
 
 // GetItem returns the accumulator being monitored

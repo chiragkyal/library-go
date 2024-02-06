@@ -181,22 +181,19 @@ func TestStopWithContextCancel(t *testing.T) {
 
 func TestAddEventHandler(t *testing.T) {
 	scenarios := []struct {
-		name       string
-		isStop     bool
-		numhandler int32
-		expectErr  bool
+		name      string
+		isStop    bool
+		expectErr bool
 	}{
 		{
-			name:       "add handler to stopped informer",
-			isStop:     true,
-			numhandler: 0,
-			expectErr:  true,
+			name:      "add handler to stopped informer",
+			isStop:    true,
+			expectErr: true,
 		},
 		{
-			name:       "correctly add handler to informer",
-			isStop:     false,
-			numhandler: 1,
-			expectErr:  false,
+			name:      "correctly add handler to informer",
+			isStop:    false,
+			expectErr: false,
 		},
 	}
 
@@ -219,9 +216,7 @@ func TestAddEventHandler(t *testing.T) {
 			if gotErr == nil && s.expectErr {
 				t.Errorf("expecting an error, got nil")
 			}
-			if monitor.numHandlers.Load() != s.numhandler {
-				t.Errorf("expected %d handler got %d", s.numhandler, monitor.numHandlers.Load())
-			}
+
 			if !s.isStop { // for handling nil pointer dereference
 				if !reflect.DeepEqual(handlerRegistration.GetKey(), key) {
 					t.Errorf("expected key %v got key %v", key, handlerRegistration.GetKey())
@@ -237,25 +232,21 @@ func TestRemoveEventHandler(t *testing.T) {
 		name         string
 		isNilHandler bool
 		isStop       bool
-		numhandler   int32
 		expectErr    bool
 	}{
 		{
-			name:       "remove handler from stopped informer",
-			isStop:     true,
-			numhandler: 1,
-			expectErr:  true,
+			name:      "remove handler from stopped informer",
+			isStop:    true,
+			expectErr: true,
 		},
 		{
 			name:         "nil handler is provided",
 			isNilHandler: true,
-			numhandler:   1,
 			expectErr:    true,
 		},
 		{
 			name:         "correct handler is provided",
 			isNilHandler: false,
-			numhandler:   0,
 			expectErr:    false,
 		},
 	}
@@ -280,10 +271,6 @@ func TestRemoveEventHandler(t *testing.T) {
 			defer func() {
 				if err := recover(); err != nil && !s.expectErr {
 					t.Errorf("unexpected error %v", err)
-				}
-				// always check numHandlers
-				if monitor.numHandlers.Load() != s.numhandler {
-					t.Errorf("expected %d handler got %d", s.numhandler, monitor.numHandlers.Load())
 				}
 			}()
 

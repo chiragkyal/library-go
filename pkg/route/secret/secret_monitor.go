@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -55,19 +56,22 @@ func (r *secretEventHandlerRegistration) GetHandler() cache.ResourceEventHandler
 	return r.ResourceEventHandlerRegistration
 }
 
+type monitoredItem struct {
+	itemMonitor *singleItemMonitor
+	numHandlers atomic.Int32
+}
+
 // secretMonitor is an implementation of the SecretMonitor
 type secretMonitor struct {
 	kubeClient kubernetes.Interface
 	lock       sync.RWMutex
-	// monitors is map of singleItemMonitor. Each singleItemMonitor monitors/watches
-	// a secret through individual informer.
-	monitors map[ObjectKey]*singleItemMonitor
+	monitors   map[ObjectKey]*monitoredItem
 }
 
 func NewSecretMonitor(kubeClient kubernetes.Interface) SecretMonitor {
 	return &secretMonitor{
 		kubeClient: kubeClient,
-		monitors:   map[ObjectKey]*singleItemMonitor{},
+		monitors:   map[ObjectKey]*monitoredItem{},
 	}
 }
 
@@ -107,12 +111,13 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 	// start secret informer if monitor does not exists
 	m, exists := s.monitors[key]
 	if !exists {
+		m = &monitoredItem{}
 		sharedInformer := createInformerFn()
-		m = newSingleItemMonitor(key, sharedInformer)
-		go m.StartInformer(ctx)
+		m.itemMonitor = newSingleItemMonitor(key, sharedInformer)
+		go m.itemMonitor.StartInformer(ctx)
 
 		// wait for first sync
-		if !cache.WaitForCacheSync(context.Background().Done(), m.HasSynced) {
+		if !cache.WaitForCacheSync(context.Background().Done(), m.itemMonitor.HasSynced) {
 			return nil, fmt.Errorf("failed waiting for cache sync")
 		}
 
@@ -122,10 +127,15 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 		klog.Info("secret informer started", " item key ", key)
 	}
 
-	// secret informer already started, just add the handler
+	// add the event handler
+	registration, err := m.itemMonitor.AddEventHandler(handler)
+	if err != nil {
+		return nil, err
+	}
+	m.numHandlers.Add(1)
 	klog.Info("secret handler added", " item key ", key)
 
-	return m.AddEventHandler(handler)
+	return registration, nil
 }
 
 // RemoveSecretEventHandler removes a secret event handler and stops the informer if no handlers are left.
@@ -148,16 +158,18 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 		return fmt.Errorf("secret monitor already removed for item key %v", key)
 	}
 
-	if err := m.RemoveEventHandler(handlerRegistration); err != nil {
+	if err := m.itemMonitor.RemoveEventHandler(handlerRegistration); err != nil {
 		return err
 	}
+	m.numHandlers.Add(-1)
 	klog.Info("secret handler removed", " item key", key)
 
 	// stop informer if there is no handler
 	if m.numHandlers.Load() <= 0 {
-		if !m.StopInformer() {
+		if !m.itemMonitor.StopInformer() {
 			klog.Error("secret informer already stopped", " item key", key)
 		}
+		// remove the key from map
 		delete(s.monitors, key)
 		klog.Info("secret informer stopped", " item key ", key)
 	}
@@ -182,7 +194,7 @@ func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistra
 		return nil, fmt.Errorf("secret monitor doesn't exist for key %v", key)
 	}
 
-	uncast, exists, err := m.GetItem()
+	uncast, exists, err := m.itemMonitor.GetItem()
 	if !exists {
 		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)
 	}
