@@ -83,7 +83,7 @@ func TestStartInformer(t *testing.T) {
 				close(monitor.stopCh)
 			}
 			go monitor.StartInformer(context.TODO())
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond) // Give the informer sometime to start
 
 			select {
 			// this case will execute if stopCh is closed
@@ -135,14 +135,16 @@ func TestStopInformer(t *testing.T) {
 
 			if s.withStart {
 				go monitor.StartInformer(context.TODO())
-				time.Sleep(10 * time.Millisecond)
+				if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
+					t.Fatal("cache not synced yet")
+				}
 			}
 			if s.alreadyStopped {
 				monitor.StopInformer()
 			}
 
-			if monitor.StopInformer() != s.expectStopped {
-				t.Error("unexpected result")
+			if got := monitor.StopInformer(); got != s.expectStopped {
+				t.Errorf("expected informed stopped to be %t but got %t", s.expectStopped, got)
 			}
 
 			var chanClosed bool
@@ -155,7 +157,7 @@ func TestStopInformer(t *testing.T) {
 			}
 
 			if s.expectChanClosed != chanClosed {
-				t.Error("unexpected result on chan closure")
+				t.Errorf("expceted stop channel closed to be %t but got %t", s.expectChanClosed, chanClosed)
 			}
 		})
 	}
@@ -165,13 +167,19 @@ func TestStopWithContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	fakeKubeClient := fake.NewSimpleClientset()
 	monitor := fakeMonitor(ctx, fakeKubeClient, ObjectKey{})
+	stopCh := make(chan bool)
 
-	go monitor.StartInformer(ctx)
-	time.Sleep(10 * time.Millisecond)
+	go func() {
+		monitor.StartInformer(ctx)
+		close(stopCh)
+	}()
+	if !cache.WaitForCacheSync(ctx.Done(), monitor.HasSynced) {
+		t.Fatal("cache not synced yet")
+	}
 
 	// cancel the context to stop the informer
 	cancel()
-	time.Sleep(10 * time.Millisecond)
+	<-stopCh
 
 	// again stopping should deny
 	if monitor.StopInformer() != false {
@@ -202,8 +210,11 @@ func TestAddEventHandler(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			key := NewObjectKey("namespace", "name")
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, key)
+
 			go monitor.StartInformer(context.TODO())
-			time.Sleep(10 * time.Millisecond)
+			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
+				t.Fatal("cache not synced yet")
+			}
 
 			if s.isStop {
 				monitor.StopInformer()
@@ -256,7 +267,9 @@ func TestRemoveEventHandler(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
 			go monitor.StartInformer(context.TODO())
-			time.Sleep(10 * time.Millisecond)
+			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
+				t.Fatal("cache not synced yet")
+			}
 
 			handlerRegistration, _ := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 			if s.isNilHandler {
@@ -286,68 +299,54 @@ func TestRemoveEventHandler(t *testing.T) {
 }
 
 func TestGetItem(t *testing.T) {
-	var (
-		namespace = "sandbox"
-		name      = "secretName"
-		secret    = fakeSecret(namespace, name)
-	)
 	scenarios := []struct {
-		name            string
-		withSecret      bool
-		expectExist     bool
-		expectUncastErr bool
+		name        string
+		secret      *corev1.Secret
+		objectKey   ObjectKey
+		expectExist bool
 	}{
 		{
-			name:            "looking for secret which is not present",
-			withSecret:      false,
-			expectExist:     false,
-			expectUncastErr: true,
+			name:        "looking for secret which is not present",
+			secret:      fakeSecret("sandbox", "wrong-name"),
+			objectKey:   NewObjectKey("sandbox", "correct-name"),
+			expectExist: false,
 		},
 		{
-			name:            "looking for correct secret",
-			withSecret:      true,
-			expectExist:     true,
-			expectUncastErr: false,
+			name:        "looking for correct secret",
+			secret:      fakeSecret("sandbox", "correct-name"),
+			objectKey:   NewObjectKey("sandbox", "correct-name"),
+			expectExist: true,
 		},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			var fakeKubeClient *fake.Clientset
-			if s.withSecret {
-				fakeKubeClient = fake.NewSimpleClientset(secret)
-			} else {
-				fakeKubeClient = fake.NewSimpleClientset()
-			}
+			fakeKubeClient := fake.NewSimpleClientset(s.secret)
 
-			monitor := fakeMonitor(context.TODO(), fakeKubeClient, NewObjectKey(namespace, name))
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, s.objectKey)
 
 			go monitor.StartInformer(context.TODO())
 			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
 				t.Fatal("cache not synced yet")
 			}
 
-			uncast, exists, err := monitor.GetItem()
+			uncast, gotExist, err := monitor.GetItem()
 
 			if err != nil {
-				t.Error(err)
+				t.Fatal(err)
 			}
-			if !exists && s.expectExist {
-				t.Error("item does not exist")
-			}
-			if exists && !s.expectExist {
-				t.Error("item should not exist")
+			if gotExist != s.expectExist {
+				t.Fatalf("item is expected to exist %t but got %t", s.expectExist, gotExist)
 			}
 
-			ret, ok := uncast.(*corev1.Secret)
-			if !ok && !s.expectUncastErr {
-				t.Errorf("unable to uncast")
-			}
-			if ok && s.expectUncastErr {
-				t.Errorf("should not be able to uncast")
-			}
-			if ret != nil && !reflect.DeepEqual(secret, ret) {
-				t.Errorf("expected %v got %v", secret, ret)
+			if s.expectExist {
+				gotSecret, ok := uncast.(*corev1.Secret)
+				if !ok {
+					t.Fatalf("unable to cast the item: %v", uncast)
+				}
+				if !reflect.DeepEqual(s.secret, gotSecret) {
+					t.Fatalf("expected to get item %v but got %v", s.secret, gotSecret)
+				}
 			}
 		})
 	}

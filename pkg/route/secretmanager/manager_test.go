@@ -3,30 +3,17 @@ package secretmanager
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
-	"github.com/openshift/library-go/pkg/route/secret"
+	"github.com/openshift/library-go/pkg/route/secret/fake"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type routeSecret struct {
 	routeName  string
 	secretName string
-}
-
-type fakeSecretMonitor struct {
-	err error
-}
-
-func (sm *fakeSecretMonitor) AddSecretEventHandler(_ context.Context, _ string, _ string, _ cache.ResourceEventHandler) (secret.SecretEventHandlerRegistration, error) {
-	return nil, sm.err
-}
-func (sm *fakeSecretMonitor) RemoveSecretEventHandler(_ secret.SecretEventHandlerRegistration) error {
-	return sm.err
-}
-func (sm *fakeSecretMonitor) GetSecret(_ secret.SecretEventHandlerRegistration) (*corev1.Secret, error) {
-	return nil, sm.err
 }
 
 func TestRegisterRoute(t *testing.T) {
@@ -35,7 +22,7 @@ func TestRegisterRoute(t *testing.T) {
 	scenarios := []struct {
 		name               string
 		rs                 []routeSecret
-		sm                 fakeSecretMonitor
+		sm                 fake.SecretMonitor
 		expectHandlersKeys []string
 		expectErr          int
 	}{
@@ -89,7 +76,9 @@ func TestRegisterRoute(t *testing.T) {
 			rs: []routeSecret{
 				{routeName: "route", secretName: "secret"},
 			},
-			sm:        fakeSecretMonitor{err: fmt.Errorf("some error")},
+			sm: fake.SecretMonitor{
+				Err: fmt.Errorf("some error"),
+			},
 			expectErr: 1,
 		},
 	}
@@ -98,14 +87,14 @@ func TestRegisterRoute(t *testing.T) {
 			mgr := NewManager(nil, nil).WithSecretMonitor(&s.sm)
 
 			gotErr := 0
-			for i := 0; i < len(s.rs); i++ {
-				if err := mgr.RegisterRoute(context.TODO(), namespace, s.rs[i].routeName, s.rs[i].secretName); err != nil {
+			for _, rs := range s.rs {
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
 					t.Log(err)
 					gotErr += 1
 				}
 			}
 			if gotErr != s.expectErr {
-				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
+				t.Fatalf("expected %d errors, got %d errors", s.expectErr, gotErr)
 			}
 			if len(s.expectHandlersKeys) != len(mgr.registeredHandlers) {
 				t.Fatalf("expected %d keys: %v, got %d keys: %v", len(s.expectHandlersKeys), s.expectHandlersKeys, len(mgr.registeredHandlers), mgr.registeredHandlers)
@@ -120,69 +109,83 @@ func TestRegisterRoute(t *testing.T) {
 }
 
 func TestUnregisterRoute(t *testing.T) {
-	var (
-		namespace  = "ns"
-		routeName  = "route"
-		secretName = "secret"
-	)
+
+	type routeName string
+	namespace := "ns"
+
 	scenarios := []struct {
 		name               string
-		withRegister       bool
-		numUnregister      int
-		sm                 fakeSecretMonitor
+		register           []routeSecret
+		unregister         []routeName
+		sm                 fake.SecretMonitor
 		expectHandlersKeys []string
 		expectErr          int
 	}{
 		{
-			name:          "unregister route without register",
-			withRegister:  false,
-			numUnregister: 1,
-			expectErr:     1,
+			name:       "unregister route without register",
+			register:   []routeSecret{},
+			unregister: []routeName{"route1"},
+			expectErr:  1,
 		},
 		{
-			name:          "unregister route more than once",
-			withRegister:  true,
-			numUnregister: 2,
-			expectErr:     1,
+			name: "unregister route more than once",
+			register: []routeSecret{
+				{routeName: "route1", secretName: "secret1"},
+			},
+			unregister: []routeName{"route1", "route1"},
+			expectErr:  1,
 		},
 		{
-			name:               "error while removing SecretEventHandler",
-			withRegister:       true,
-			numUnregister:      1,
-			sm:                 fakeSecretMonitor{err: fmt.Errorf("some error")},
-			expectHandlersKeys: []string{"some key"},
+			name: "error while removing SecretEventHandler",
+			register: []routeSecret{
+				{routeName: "route1", secretName: "secret1"},
+			},
+			unregister: []routeName{"route1"},
+			sm: fake.SecretMonitor{
+				Err: fmt.Errorf("some error"),
+			},
+			expectHandlersKeys: []string{namespace + "/route1"},
 			expectErr:          1,
 		},
 		{
-			name:          "correctly unregister route",
-			withRegister:  true,
-			numUnregister: 1,
-			expectErr:     0,
+			name: "correctly unregister route",
+			register: []routeSecret{
+				{routeName: "route1", secretName: "secret1"},
+			},
+			unregister: []routeName{"route1"},
+			expectErr:  0,
 		},
 	}
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
 			mgr := NewManager(nil, nil)
-			if s.withRegister {
-				mgr.WithSecretMonitor(&fakeSecretMonitor{}) // avoid error from AddSecretEventHandler
-				if err := mgr.RegisterRoute(context.TODO(), namespace, routeName, secretName); err != nil {
+			// register
+			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
+			for _, rs := range s.register {
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
 					t.Error(err)
 				}
 			}
 
+			// unregister
 			mgr.WithSecretMonitor(&s.sm)
 			gotErr := 0
-			for i := 0; i < s.numUnregister; i++ {
-				if err := mgr.UnregisterRoute(namespace, routeName); err != nil {
+			for _, routeName := range s.unregister {
+				if err := mgr.UnregisterRoute(namespace, string(routeName)); err != nil {
 					t.Log(err)
 					gotErr += 1
 				}
 			}
 			if gotErr != s.expectErr {
-				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
+				t.Fatalf("expected %d errors, got %d errors", s.expectErr, gotErr)
 			}
 			if len(s.expectHandlersKeys) != len(mgr.registeredHandlers) {
 				t.Fatalf("expected %d keys: %v, got %d keys: %v", len(s.expectHandlersKeys), s.expectHandlersKeys, len(mgr.registeredHandlers), mgr.registeredHandlers)
+			}
+			for _, key := range s.expectHandlersKeys {
+				if _, exists := mgr.registeredHandlers[key]; !exists {
+					t.Errorf("%s key should exist", key)
+				}
 			}
 		})
 	}
@@ -190,50 +193,107 @@ func TestUnregisterRoute(t *testing.T) {
 
 func TestGetSecret(t *testing.T) {
 	var (
-		namespace  = "ns"
-		routeName  = "route"
-		secretName = "secret"
+		namespace = "ns"
+		routeName = "route"
 	)
+
 	scenarios := []struct {
-		name         string
-		withRegister bool
-		sm           fakeSecretMonitor
-		expectErr    int
+		name      string
+		register  []routeSecret
+		sm        fake.SecretMonitor
+		expectErr bool
 	}{
 		{
-			name:         "get secret without register",
-			withRegister: false,
-			expectErr:    1,
+			name:      "get secret without register",
+			register:  []routeSecret{},
+			expectErr: true,
 		},
 		{
-			name:         "error from secret monitor while calling GetSecret",
-			withRegister: true,
-			sm:           fakeSecretMonitor{err: fmt.Errorf("some error")},
-			expectErr:    1,
+			name:     "error from secret monitor while calling GetSecret",
+			register: []routeSecret{{routeName, "secretName"}},
+			sm: fake.SecretMonitor{
+				Err: fmt.Errorf("some error"),
+			},
+			expectErr: true,
 		},
 		{
-			name:         "successfully got secret",
-			withRegister: true,
-			expectErr:    0,
+			name:     "successfully got secret",
+			register: []routeSecret{{routeName, "secretName"}},
+			sm: fake.SecretMonitor{
+				Err: nil,
+				Secret: &corev1.Secret{
+					Type: corev1.SecretTypeOpaque,
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "secretName",
+						Namespace: namespace,
+					},
+				},
+			},
+			expectErr: false,
 		},
 	}
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
 			mgr := NewManager(nil, nil)
-			if s.withRegister {
-				mgr.WithSecretMonitor(&fakeSecretMonitor{}) // avoid error from AddSecretEventHandler
-				if err := mgr.RegisterRoute(context.TODO(), namespace, routeName, secretName); err != nil {
+			// register
+			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
+			for _, rs := range s.register {
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
 					t.Error(err)
 				}
 			}
 
 			mgr.WithSecretMonitor(&s.sm)
-			gotErr := 0
-			if _, err := mgr.GetSecret(namespace, routeName); err != nil {
-				gotErr += 1
+			gotSec, err := mgr.GetSecret(context.TODO(), namespace, routeName)
+
+			if (err != nil) != s.expectErr {
+				t.Fatalf("expected errors to be %t, but got %t", s.expectErr, err != nil)
 			}
-			if gotErr != s.expectErr {
-				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
+
+			if !reflect.DeepEqual(s.sm.Secret, gotSec) {
+				t.Errorf("expected %v got %v", s.sm.Secret, gotSec)
+			}
+		})
+	}
+}
+
+func TestIsRouteRegistered(t *testing.T) {
+	var (
+		namespace = "ns"
+		routeName = "route"
+	)
+
+	scenarios := []struct {
+		name     string
+		register []routeSecret
+		expect   bool
+	}{
+		{
+			name:     "when route is not registered",
+			register: []routeSecret{},
+			expect:   false,
+		},
+		{
+			name:     "when route is registered",
+			register: []routeSecret{{routeName, "secretName"}},
+			expect:   true,
+		},
+	}
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			mgr := NewManager(nil, nil)
+			// register
+			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
+			for _, rs := range s.register {
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
+					t.Error(err)
+				}
+			}
+
+			got := mgr.IsRouteRegistered(namespace, routeName)
+
+			if got != s.expect {
+				t.Fatalf("expected %t, but got %t", s.expect, got)
 			}
 		})
 	}
