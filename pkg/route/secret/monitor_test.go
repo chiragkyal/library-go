@@ -135,6 +135,7 @@ func TestStopInformer(t *testing.T) {
 
 			if s.withStart {
 				go monitor.StartInformer(context.TODO())
+				// wait for the informer to start
 				if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
 					t.Fatal("cache not synced yet")
 				}
@@ -144,7 +145,7 @@ func TestStopInformer(t *testing.T) {
 			}
 
 			if got := monitor.StopInformer(); got != s.expectStopped {
-				t.Errorf("expected informed stopped to be %t but got %t", s.expectStopped, got)
+				t.Errorf("expected informer stopped to be %t but got %t", s.expectStopped, got)
 			}
 
 			var chanClosed bool
@@ -157,7 +158,7 @@ func TestStopInformer(t *testing.T) {
 			}
 
 			if s.expectChanClosed != chanClosed {
-				t.Errorf("expceted stop channel closed to be %t but got %t", s.expectChanClosed, chanClosed)
+				t.Errorf("expected stop channel closed to be %t but got %t", s.expectChanClosed, chanClosed)
 			}
 		})
 	}
@@ -173,6 +174,7 @@ func TestStopWithContextCancel(t *testing.T) {
 		monitor.StartInformer(ctx)
 		close(stopCh)
 	}()
+	// wait for the informer to start
 	if !cache.WaitForCacheSync(ctx.Done(), monitor.HasSynced) {
 		t.Fatal("cache not synced yet")
 	}
@@ -183,13 +185,14 @@ func TestStopWithContextCancel(t *testing.T) {
 
 	// again stopping should deny
 	if monitor.StopInformer() != false {
-		t.Error("context cancellation did not work properly")
+		t.Fatal("context cancellation did not work properly")
 	}
 }
 
 func TestAddEventHandler(t *testing.T) {
 	scenarios := []struct {
 		name      string
+		key       ObjectKey
 		isStop    bool
 		expectErr bool
 	}{
@@ -200,6 +203,7 @@ func TestAddEventHandler(t *testing.T) {
 		},
 		{
 			name:      "correctly add handler to informer",
+			key:       NewObjectKey("namespace", "name"),
 			isStop:    false,
 			expectErr: false,
 		},
@@ -208,10 +212,10 @@ func TestAddEventHandler(t *testing.T) {
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
-			key := NewObjectKey("namespace", "name")
-			monitor := fakeMonitor(context.TODO(), fakeKubeClient, key)
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, s.key)
 
 			go monitor.StartInformer(context.TODO())
+			// wait for the informer to start
 			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
 				t.Fatal("cache not synced yet")
 			}
@@ -222,15 +226,15 @@ func TestAddEventHandler(t *testing.T) {
 
 			handlerRegistration, gotErr := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 			if gotErr != nil && !s.expectErr {
-				t.Errorf("unexpected error %v", gotErr)
+				t.Fatalf("unexpected error %v", gotErr)
 			}
 			if gotErr == nil && s.expectErr {
-				t.Errorf("expecting an error, got nil")
+				t.Fatalf("expecting an error, got nil")
 			}
 
 			if !s.isStop { // for handling nil pointer dereference
-				if !reflect.DeepEqual(handlerRegistration.GetKey(), key) {
-					t.Errorf("expected key %v got key %v", key, handlerRegistration.GetKey())
+				if !reflect.DeepEqual(handlerRegistration.GetKey(), s.key) {
+					t.Fatalf("expected key %v got key %v", s.key, handlerRegistration.GetKey())
 				}
 			}
 		})
@@ -267,6 +271,7 @@ func TestRemoveEventHandler(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset()
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
 			go monitor.StartInformer(context.TODO())
+			// wait for the informer to start
 			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
 				t.Fatal("cache not synced yet")
 			}
@@ -326,6 +331,7 @@ func TestGetItem(t *testing.T) {
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, s.objectKey)
 
 			go monitor.StartInformer(context.TODO())
+			// wait for the informer to start
 			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
 				t.Fatal("cache not synced yet")
 			}
@@ -333,7 +339,7 @@ func TestGetItem(t *testing.T) {
 			uncast, gotExist, err := monitor.GetItem()
 
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if gotExist != s.expectExist {
 				t.Fatalf("item is expected to exist %t but got %t", s.expectExist, gotExist)

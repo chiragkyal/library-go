@@ -68,9 +68,8 @@ func (i *singleItemMonitor) StartInformer(ctx context.Context) {
 				klog.Error("failed to stop informer")
 			}
 		// this case is required to exit from the goroutine
-		// after normal StopInformer() call
+		// after normal StopInformer() call i.e when stopCh is closed.
 		case <-i.stopCh:
-			klog.V(5).Info("successfully stopped")
 		}
 	}()
 

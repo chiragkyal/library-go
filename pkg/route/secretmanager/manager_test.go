@@ -9,6 +9,7 @@ import (
 	"github.com/openshift/library-go/pkg/route/secret/fake"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 )
 
 type routeSecret struct {
@@ -88,8 +89,7 @@ func TestRegisterRoute(t *testing.T) {
 
 			gotErr := 0
 			for _, rs := range s.rs {
-				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
-					t.Log(err)
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
 					gotErr += 1
 				}
 			}
@@ -162,8 +162,8 @@ func TestUnregisterRoute(t *testing.T) {
 			// register
 			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
 			for _, rs := range s.register {
-				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
-					t.Error(err)
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
+					t.Fatalf("failed to register %v: %v", rs, err)
 				}
 			}
 
@@ -238,8 +238,8 @@ func TestGetSecret(t *testing.T) {
 			// register
 			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
 			for _, rs := range s.register {
-				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
-					t.Error(err)
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
+					t.Fatalf("failed to register %v: %v", rs, err)
 				}
 			}
 
@@ -251,7 +251,7 @@ func TestGetSecret(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(s.sm.Secret, gotSec) {
-				t.Errorf("expected %v got %v", s.sm.Secret, gotSec)
+				t.Fatalf("expected %v got %v", s.sm.Secret, gotSec)
 			}
 		})
 	}
@@ -285,8 +285,8 @@ func TestIsRouteRegistered(t *testing.T) {
 			// register
 			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
 			for _, rs := range s.register {
-				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName); err != nil {
-					t.Error(err)
+				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
+					t.Fatalf("failed to register %v: %v", rs, err)
 				}
 			}
 

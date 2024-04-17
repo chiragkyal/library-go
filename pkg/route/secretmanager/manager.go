@@ -29,10 +29,6 @@ type Manager struct {
 
 	// Work queue to be used by the consumer of this Manager, mostly to add secret change events.
 	queue workqueue.RateLimitingInterface
-
-	// Event handler for secret changes.
-	// The consumer should set it's value with `WithSecretHandler` before calling RegisterRoute().
-	secretHandler cache.ResourceEventHandler
 }
 
 func NewManager(kubeClient kubernetes.Interface, queue workqueue.RateLimitingInterface) *Manager {
@@ -41,15 +37,7 @@ func NewManager(kubeClient kubernetes.Interface, queue workqueue.RateLimitingInt
 		handlersLock:       sync.RWMutex{},
 		queue:              queue,
 		registeredHandlers: make(map[string]secret.SecretEventHandlerRegistration),
-		// Prefer nil during initialization. Caller should update the value with `WithSecretHandler`.
-		secretHandler: nil,
 	}
-}
-
-// WithSecretHandler sets the secret event handler for the manager.
-func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Manager {
-	m.secretHandler = handler
-	return m
 }
 
 // WithSecretMonitor sets the secret monitor for the manager.
@@ -65,7 +53,7 @@ func (m *Manager) Queue() workqueue.RateLimitingInterface {
 
 // RegisterRoute registers a route with a secret, enabling the manager to watch for the secret changes and associate them with the handler functions.
 // Returns an error if the route is already registered with a secret or if adding the secret event handler fails.
-func (m *Manager) RegisterRoute(ctx context.Context, namespace, routeName, secretName string) error {
+func (m *Manager) RegisterRoute(ctx context.Context, namespace, routeName, secretName string, handler cache.ResourceEventHandlerFuncs) error {
 	m.handlersLock.Lock()
 	defer m.handlersLock.Unlock()
 
@@ -81,7 +69,7 @@ func (m *Manager) RegisterRoute(ctx context.Context, namespace, routeName, secre
 
 	// Add a secret event handler for the specified namespace and secret, with the handler functions.
 	klog.V(5).Infof("trying to add handler for key %s with secret %s", key, secretName)
-	handlerRegistration, err := m.monitor.AddSecretEventHandler(ctx, namespace, secretName, m.secretHandler)
+	handlerRegistration, err := m.monitor.AddSecretEventHandler(ctx, namespace, secretName, handler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}

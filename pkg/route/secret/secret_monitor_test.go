@@ -61,7 +61,7 @@ func TestAddSecretEventHandler(t *testing.T) {
 				}
 			}
 			if gotErr != s.expectErr {
-				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
+				t.Fatalf("expected %d errors, got %d errors", s.expectErr, gotErr)
 			}
 
 			for k, h := range s.expectHandlers {
@@ -196,7 +196,7 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 				}
 			}
 			if gotErr != s.expectErr {
-				t.Errorf("expected %d errors, got %d errors", s.expectErr, gotErr)
+				t.Fatalf("expected %d errors, got %d errors", s.expectErr, gotErr)
 			}
 
 			for k, numHandlers := range s.expectHandlers {
@@ -221,36 +221,33 @@ func TestGetSecret(t *testing.T) {
 		name            string
 		isNilHandlerReg bool
 		isKeyRemoved    bool
-		secret          *corev1.Secret
+		secret          corev1.Secret
 		expectErr       bool
 	}{
 		{
+			name:      "secret exists and correct handlerRegistration is provided",
+			secret:    *fakeSecret(namespace, secretName),
+			expectErr: false,
+		},
+		{
 			name:            "nil handlerRegistration is provided",
 			isNilHandlerReg: true,
-			secret:          &corev1.Secret{},
 			expectErr:       true,
 		},
 		{
 			name:         "secret monitor key already removed",
 			isKeyRemoved: true,
-			secret:       &corev1.Secret{},
 			expectErr:    true,
 		},
 		{
 			name:      "secret does not exist and correct handlerRegistration is provided",
-			secret:    &corev1.Secret{},
 			expectErr: true,
-		},
-		{
-			name:      "secret exists and correct handlerRegistration is provided",
-			secret:    fakeSecret(namespace, secretName),
-			expectErr: false,
 		},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			kubeClient := fake.NewSimpleClientset(s.secret)
+			kubeClient := fake.NewSimpleClientset(&s.secret)
 			fakeInformer := fakeSecretInformer(context.TODO(), kubeClient, namespace, secretName)
 			key := NewObjectKey(namespace, secretName)
 			sm := secretMonitor{
@@ -274,7 +271,7 @@ func TestGetSecret(t *testing.T) {
 				t.Fatalf("expected errors to be %t, but got %t", s.expectErr, err != nil)
 			}
 			if !s.expectErr {
-				if !reflect.DeepEqual(s.secret, gotSec) {
+				if !reflect.DeepEqual(&s.secret, gotSec) {
 					t.Errorf("expected %v got %v", s.secret, gotSec)
 				}
 			}
