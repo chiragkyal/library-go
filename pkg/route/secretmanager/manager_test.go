@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/openshift/library-go/pkg/route/secret"
 	"github.com/openshift/library-go/pkg/route/secret/fake"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,7 +86,10 @@ func TestRegisterRoute(t *testing.T) {
 	}
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			mgr := NewManager(nil, nil).WithSecretMonitor(&s.sm)
+			mgr := &manager{
+				registeredHandlers: make(map[string]secret.SecretEventHandlerRegistration),
+				monitor:            &s.sm,
+			}
 
 			gotErr := 0
 			for _, rs := range s.rs {
@@ -158,9 +162,9 @@ func TestUnregisterRoute(t *testing.T) {
 	}
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			mgr := NewManager(nil, nil)
+			mgr := &manager{registeredHandlers: make(map[string]secret.SecretEventHandlerRegistration)}
 			// register
-			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
+			mgr.monitor = &fake.SecretMonitor{} // avoid error from AddSecretEventHandler
 			for _, rs := range s.register {
 				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
 					t.Fatalf("failed to register %v: %v", rs, err)
@@ -168,7 +172,7 @@ func TestUnregisterRoute(t *testing.T) {
 			}
 
 			// unregister
-			mgr.WithSecretMonitor(&s.sm)
+			mgr.monitor = &s.sm
 			gotErr := 0
 			for _, routeName := range s.unregister {
 				if err := mgr.UnregisterRoute(namespace, string(routeName)); err != nil {
@@ -234,16 +238,16 @@ func TestGetSecret(t *testing.T) {
 	}
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			mgr := NewManager(nil, nil)
+			mgr := manager{registeredHandlers: make(map[string]secret.SecretEventHandlerRegistration)}
 			// register
-			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
+			mgr.monitor = &fake.SecretMonitor{} // avoid error from AddSecretEventHandler
 			for _, rs := range s.register {
 				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
 					t.Fatalf("failed to register %v: %v", rs, err)
 				}
 			}
 
-			mgr.WithSecretMonitor(&s.sm)
+			mgr.monitor = &s.sm
 			gotSec, err := mgr.GetSecret(context.TODO(), namespace, routeName)
 
 			if (err != nil) != s.expectErr {
@@ -281,9 +285,11 @@ func TestIsRouteRegistered(t *testing.T) {
 	}
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			mgr := NewManager(nil, nil)
+			mgr := &manager{
+				registeredHandlers: make(map[string]secret.SecretEventHandlerRegistration),
+				monitor:            &fake.SecretMonitor{},
+			}
 			// register
-			mgr.WithSecretMonitor(&fake.SecretMonitor{}) // avoid error from AddSecretEventHandler
 			for _, rs := range s.register {
 				if err := mgr.RegisterRoute(context.TODO(), namespace, rs.routeName, rs.secretName, cache.ResourceEventHandlerFuncs{}); err != nil {
 					t.Fatalf("failed to register %v: %v", rs, err)

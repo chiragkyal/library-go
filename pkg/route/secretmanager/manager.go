@@ -14,8 +14,16 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// Manager is responsible for managing secrets associated with routes.
-type Manager struct {
+type SecretManager interface {
+	RegisterRoute(ctx context.Context, namespace string, routeName string, secretName string, handler cache.ResourceEventHandlerFuncs) error
+	UnregisterRoute(namespace string, routeName string) error
+	GetSecret(ctx context.Context, namespace string, routeName string) (*v1.Secret, error)
+	IsRouteRegistered(namespace string, routeName string) bool
+	Queue() workqueue.RateLimitingInterface
+}
+
+// Manager is responsible for managing secrets associated with routes. It implements SecretManager.
+type manager struct {
 	// monitor for managing and watching "single" secret dynamically.
 	monitor secret.SecretMonitor
 
@@ -31,8 +39,8 @@ type Manager struct {
 	queue workqueue.RateLimitingInterface
 }
 
-func NewManager(kubeClient kubernetes.Interface, queue workqueue.RateLimitingInterface) *Manager {
-	return &Manager{
+func NewManager(kubeClient kubernetes.Interface, queue workqueue.RateLimitingInterface) SecretManager {
+	return &manager{
 		monitor:            secret.NewSecretMonitor(kubeClient),
 		handlersLock:       sync.RWMutex{},
 		queue:              queue,
@@ -40,20 +48,14 @@ func NewManager(kubeClient kubernetes.Interface, queue workqueue.RateLimitingInt
 	}
 }
 
-// WithSecretMonitor sets the secret monitor for the manager.
-func (m *Manager) WithSecretMonitor(sm secret.SecretMonitor) *Manager {
-	m.monitor = sm
-	return m
-}
-
 // Queue returns the work queue for the manager.
-func (m *Manager) Queue() workqueue.RateLimitingInterface {
+func (m *manager) Queue() workqueue.RateLimitingInterface {
 	return m.queue
 }
 
 // RegisterRoute registers a route with a secret, enabling the manager to watch for the secret changes and associate them with the handler functions.
 // Returns an error if the route is already registered with a secret or if adding the secret event handler fails.
-func (m *Manager) RegisterRoute(ctx context.Context, namespace, routeName, secretName string, handler cache.ResourceEventHandlerFuncs) error {
+func (m *manager) RegisterRoute(ctx context.Context, namespace, routeName, secretName string, handler cache.ResourceEventHandlerFuncs) error {
 	m.handlersLock.Lock()
 	defer m.handlersLock.Unlock()
 
@@ -83,7 +85,7 @@ func (m *Manager) RegisterRoute(ctx context.Context, namespace, routeName, secre
 
 // UnregisterRoute removes the registration of a route from the manager.
 // It removes the secret event handler from secret monitor and deletes its associated handler from manager's map.
-func (m *Manager) UnregisterRoute(namespace, routeName string) error {
+func (m *manager) UnregisterRoute(namespace, routeName string) error {
 	m.handlersLock.Lock()
 	defer m.handlersLock.Unlock()
 
@@ -110,7 +112,7 @@ func (m *Manager) UnregisterRoute(namespace, routeName string) error {
 }
 
 // GetSecret retrieves the secret object registered with a route.
-func (m *Manager) GetSecret(ctx context.Context, namespace, routeName string) (*v1.Secret, error) {
+func (m *manager) GetSecret(ctx context.Context, namespace, routeName string) (*v1.Secret, error) {
 	m.handlersLock.RLock()
 	defer m.handlersLock.RUnlock()
 
@@ -131,7 +133,7 @@ func (m *Manager) GetSecret(ctx context.Context, namespace, routeName string) (*
 }
 
 // IsRouteRegistered returns true if route is registered, false otherwise
-func (m *Manager) IsRouteRegistered(namespace, routeName string) bool {
+func (m *manager) IsRouteRegistered(namespace, routeName string) bool {
 	m.handlersLock.RLock()
 	defer m.handlersLock.RUnlock()
 
