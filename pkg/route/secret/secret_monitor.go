@@ -200,12 +200,12 @@ func (s *secretMonitor) GetSecret(ctx context.Context, handlerRegistration Secre
 	}
 
 	uncast, exists, err := m.itemMonitor.GetItem()
-	if !exists {
-		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)
-	}
 
 	if err != nil {
 		return nil, err
+	}
+	if !exists {
+		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)
 	}
 
 	secret, ok := uncast.(*corev1.Secret)

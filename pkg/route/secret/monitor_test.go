@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,7 +82,6 @@ func TestStartInformer(t *testing.T) {
 				close(monitor.stopCh)
 			}
 			go monitor.StartInformer(context.TODO())
-			time.Sleep(10 * time.Millisecond) // Give the informer sometime to start
 
 			select {
 			// this case will execute if stopCh is closed
@@ -92,6 +90,10 @@ func TestStartInformer(t *testing.T) {
 					t.Error("informer is not running")
 				}
 			default:
+				// wait for the informer to start
+				if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
+					t.Fatal("cache not synced yet")
+				}
 				t.Log("informer is running")
 			}
 		})
